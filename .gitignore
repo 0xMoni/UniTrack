@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Data files (contain user data)
+*.json
+!package.json
+!package-lock.json
+!app.json
+!eas.json
+
+# Playwright
+.playwright/
+
+# Node modules (for frontend)
+node_modules/
+
+# Build outputs
+*.apk
+*.aab
+*.ipa
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Screenshots and previews
+*.png
+!mobile/assets/*.png
