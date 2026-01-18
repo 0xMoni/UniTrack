@@ -26,6 +26,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "06293e39-d62e-45bc-a0d5-631e8fac673b"
+      }
+    },
+    "owner": "spring_07"
   }
 }

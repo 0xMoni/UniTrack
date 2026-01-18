@@ -19,7 +19,7 @@ const DEFAULT_URL = '';
 function SplashScreen() {
   return (
     <View style={splashStyles.container}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Image
         source={require('./assets/icon.png')}
         style={splashStyles.logo}
@@ -34,7 +34,7 @@ function SplashScreen() {
 const splashStyles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#2563eb',
+    backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -46,12 +46,12 @@ const splashStyles = StyleSheet.create({
   appName: {
     fontSize: 42,
     fontWeight: '800',
-    color: '#fff',
+    color: '#1f2937',
     marginBottom: 8,
   },
   tagline: {
     fontSize: 16,
-    color: 'rgba(255,255,255,0.8)',
+    color: '#6b7280',
     fontWeight: '500',
   },
 });
@@ -335,7 +335,7 @@ export default function App() {
   if (!isLoggedIn) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <View style={styles.loginContainer}>
           <Image
             source={require('./assets/icon.png')}
@@ -355,9 +355,15 @@ export default function App() {
               placeholderTextColor="#999"
               autoCapitalize="none"
             />
-            <Text style={styles.loginHint}>
-              Enter the IP address where UniTrack backend is running
-            </Text>
+
+            <View style={styles.instructionBox}>
+              <Text style={styles.instructionTitle}>How to get this URL?</Text>
+              <Text style={styles.instructionStep}>1. On your computer, run the UniTrack backend:</Text>
+              <Text style={styles.instructionCode}>python -m unitrack.cli.main serve --host 0.0.0.0</Text>
+              <Text style={styles.instructionStep}>2. Find your computer's IP address</Text>
+              <Text style={styles.instructionStep}>3. Enter it above as: http://YOUR_IP:5050</Text>
+              <Text style={styles.instructionNote}>Both devices must be on the same WiFi network</Text>
+            </View>
 
             <TouchableOpacity
               style={styles.loginButton}
@@ -887,7 +893,7 @@ const styles = StyleSheet.create({
   // Login Screen Styles
   loginContainer: {
     flex: 1,
-    backgroundColor: '#2563eb',
+    backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
@@ -900,19 +906,24 @@ const styles = StyleSheet.create({
   loginTitle: {
     fontSize: 36,
     fontWeight: '800',
-    color: '#fff',
+    color: '#1f2937',
     marginBottom: 8,
   },
   loginSubtitle: {
     fontSize: 16,
-    color: 'rgba(255,255,255,0.8)',
+    color: '#6b7280',
     marginBottom: 40,
   },
   loginForm: {
     width: '100%',
-    backgroundColor: '#fff',
+    backgroundColor: '#f9fafb',
     borderRadius: 16,
     padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
   },
   loginLabel: {
     fontSize: 14,
@@ -932,6 +943,43 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#9ca3af',
     marginBottom: 24,
+  },
+  instructionBox: {
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: '#2563eb',
+  },
+  instructionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e40af',
+    marginBottom: 12,
+  },
+  instructionStep: {
+    fontSize: 13,
+    color: '#374151',
+    marginBottom: 6,
+    lineHeight: 18,
+  },
+  instructionCode: {
+    fontSize: 12,
+    fontFamily: 'monospace',
+    backgroundColor: '#1f2937',
+    color: '#22c55e',
+    padding: 8,
+    borderRadius: 6,
+    marginBottom: 10,
+    marginTop: 4,
+    overflow: 'hidden',
+  },
+  instructionNote: {
+    fontSize: 11,
+    color: '#6b7280',
+    fontStyle: 'italic',
+    marginTop: 8,
   },
   loginButton: {
     backgroundColor: '#2563eb',
