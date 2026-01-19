@@ -12,6 +12,8 @@ import {
   SafeAreaView,
   Image,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -26,7 +28,7 @@ function SplashScreen() {
         resizeMode="contain"
       />
       <Text style={splashStyles.appName}>UniTrack</Text>
-      <Text style={splashStyles.tagline}>Universal Attendance Tracker</Text>
+      <Text style={splashStyles.tagline}>University Attendance Tracker</Text>
     </View>
   );
 }
@@ -67,6 +69,7 @@ export default function App() {
   const [erpUrl, setErpUrl] = useState('https://erp.cmrit.ac.in');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   // Student & attendance data
   const [studentInfo, setStudentInfo] = useState(null);
@@ -463,66 +466,82 @@ export default function App() {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
-        <ScrollView contentContainerStyle={styles.loginScrollContent}>
-          <View style={styles.loginContainer}>
-            <Image
-              source={require('./assets/icon.png')}
-              style={styles.loginLogo}
-              resizeMode="contain"
-            />
-            <Text style={styles.loginTitle}>UniTrack</Text>
-            <Text style={styles.loginSubtitle}>Universal Attendance Tracker</Text>
-
-            <View style={styles.loginForm}>
-              <Text style={styles.loginLabel}>ERP URL</Text>
-              <TextInput
-                style={styles.loginInput}
-                value={erpUrl}
-                onChangeText={setErpUrl}
-                placeholder="https://erp.cmrit.ac.in"
-                placeholderTextColor="#999"
-                autoCapitalize="none"
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <ScrollView
+            contentContainerStyle={styles.loginScrollContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.loginContainer}>
+              <Image
+                source={require('./assets/icon.png')}
+                style={styles.loginLogo}
+                resizeMode="contain"
               />
+              <Text style={styles.loginTitle}>UniTrack</Text>
+              <Text style={styles.loginSubtitle}>University Attendance Tracker</Text>
 
-              <Text style={styles.loginLabel}>Username (Email)</Text>
-              <TextInput
-                style={styles.loginInput}
-                value={username}
-                onChangeText={setUsername}
-                placeholder="your.email@cmrit.ac.in"
-                placeholderTextColor="#999"
-                autoCapitalize="none"
-                keyboardType="email-address"
-              />
+              <View style={styles.loginForm}>
+                <Text style={styles.loginLabel}>ERP URL</Text>
+                <TextInput
+                  style={styles.loginInput}
+                  value={erpUrl}
+                  onChangeText={setErpUrl}
+                  placeholder="https://erp.cmrit.ac.in"
+                  placeholderTextColor="#999"
+                  autoCapitalize="none"
+                />
 
-              <Text style={styles.loginLabel}>Password</Text>
-              <TextInput
-                style={styles.loginInput}
-                value={password}
-                onChangeText={setPassword}
-                placeholder="Enter your ERP password"
-                placeholderTextColor="#999"
-                secureTextEntry
-              />
+                <Text style={styles.loginLabel}>Username (Email)</Text>
+                <TextInput
+                  style={styles.loginInput}
+                  value={username}
+                  onChangeText={setUsername}
+                  placeholder="your.email@cmrit.ac.in"
+                  placeholderTextColor="#999"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
 
-              <TouchableOpacity
-                style={[styles.loginButton, loading && styles.loginButtonDisabled]}
-                onPress={loginAndFetchAttendance}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.loginButtonText}>Login & Fetch Attendance</Text>
-                )}
-              </TouchableOpacity>
+                <Text style={styles.loginLabel}>Password</Text>
+                <View style={styles.passwordContainer}>
+                  <TextInput
+                    style={styles.passwordInput}
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="Enter your ERP password"
+                    placeholderTextColor="#999"
+                    secureTextEntry={!showPassword}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeButton}
+                    onPress={() => setShowPassword(!showPassword)}
+                  >
+                    <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁️'}</Text>
+                  </TouchableOpacity>
+                </View>
 
-              <Text style={styles.loginNote}>
-                Your credentials are stored locally and used only to fetch attendance from your ERP.
-              </Text>
+                <TouchableOpacity
+                  style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+                  onPress={loginAndFetchAttendance}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.loginButtonText}>Login & Fetch Attendance</Text>
+                  )}
+                </TouchableOpacity>
+
+                <Text style={styles.loginNote}>
+                  Your credentials are stored locally and used only to fetch attendance from your ERP.
+                </Text>
+              </View>
             </View>
-          </View>
-        </ScrollView>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
@@ -1074,6 +1093,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 16,
     color: '#1f2937',
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  passwordInput: {
+    flex: 1,
+    padding: 14,
+    fontSize: 16,
+    color: '#1f2937',
+  },
+  eyeButton: {
+    padding: 14,
+  },
+  eyeIcon: {
+    fontSize: 20,
   },
   loginButton: {
     backgroundColor: '#2563eb',

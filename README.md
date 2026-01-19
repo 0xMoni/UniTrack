@@ -1,6 +1,6 @@
 # UniTrack
 
-**Universal Attendance Tracker** - Track your college attendance from any ERP system.
+**University Attendance Tracker** - Track your college attendance from any ERP system.
 
 ## Features
 
