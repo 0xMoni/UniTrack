@@ -27,11 +27,11 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "owner": "monii07",
     "extra": {
       "eas": {
-        "projectId": "06293e39-d62e-45bc-a0d5-631e8fac673b"
+        "projectId": "364262ad-b4bd-4c39-b565-cfd20f7231c6"
       }
-    },
-    "owner": "spring_07"
+    }
   }
 }
