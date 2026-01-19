@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -16,7 +16,7 @@ import {
   Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import CookieManager from '@react-native-cookies/cookies';
+import { WebView } from 'react-native-webview';
 
 // Splash Screen Component
 function SplashScreen() {
@@ -76,6 +76,11 @@ export default function App() {
   const [studentInfo, setStudentInfo] = useState(null);
   const [subjects, setSubjects] = useState([]);
   const [lastFetched, setLastFetched] = useState(null);
+
+  // Hidden WebView for authentication
+  const webViewRef = useRef(null);
+  const [webViewUrl, setWebViewUrl] = useState(null);
+  const [authStep, setAuthStep] = useState(null); // 'login', 'fetch', null
 
   // Threshold settings
   const [defaultThreshold, setDefaultThreshold] = useState('70');
@@ -137,85 +142,102 @@ export default function App() {
     }
 
     setLoading(true);
+    setAuthStep('login');
+    // Start with login page - WebView will handle the rest
+    setWebViewUrl(`${erpUrl}/login.htm`);
+  };
 
-    try {
-      // Clear any existing cookies first
-      await CookieManager.clearAll();
+  // JavaScript to inject into WebView for login
+  const getLoginScript = () => `
+    (function() {
+      // Check if we're on login page
+      var usernameField = document.querySelector('input[name="j_username"]');
+      var passwordField = document.querySelector('input[name="j_password"]');
+      var form = document.querySelector('form');
 
-      // Step 1: Get login page to establish session
-      const loginPageResponse = await fetch(`${erpUrl}/login.htm`, {
-        method: 'GET',
-        credentials: 'include',
-      });
+      if (usernameField && passwordField) {
+        usernameField.value = '${username.replace(/'/g, "\\'")}';
+        passwordField.value = '${password.replace(/'/g, "\\'")}';
 
-      // Step 2: Login with Spring Security endpoint
-      const loginUrl = `${erpUrl}/j_spring_security_check`;
-      const formData = `j_username=${encodeURIComponent(username)}&j_password=${encodeURIComponent(password)}`;
+        // Submit form
+        if (form) {
+          form.submit();
+        }
+      }
+    })();
+    true;
+  `;
 
-      const loginResponse = await fetch(loginUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-        body: formData,
-        credentials: 'include',
-        redirect: 'follow',
-      });
+  // JavaScript to fetch attendance data
+  const getFetchScript = () => `
+    (function() {
+      fetch('${erpUrl}/stu_getSubjectOnChangeWithSemId1.json')
+        .then(response => response.json())
+        .then(data => {
+          window.ReactNativeWebView.postMessage(JSON.stringify({type: 'attendance', data: data}));
+        })
+        .catch(error => {
+          window.ReactNativeWebView.postMessage(JSON.stringify({type: 'error', message: error.toString()}));
+        });
+    })();
+    true;
+  `;
 
-      // Check if we got redirected back to login (failed) or to dashboard (success)
-      const finalUrl = loginResponse.url;
+  // Handle WebView navigation
+  const handleNavigationChange = (navState) => {
+    const url = navState.url;
+    console.log('Navigation:', url);
 
-      if (finalUrl.includes('login') || finalUrl.includes('error') || finalUrl.includes('authfailed')) {
-        Alert.alert('Login Failed', 'Invalid username or password. Please check your credentials.');
+    if (authStep === 'login') {
+      // Check if login failed
+      if (url.includes('authfailed') || url.includes('error')) {
         setLoading(false);
+        setAuthStep(null);
+        setWebViewUrl(null);
+        Alert.alert('Login Failed', 'Invalid username or password. Please check your credentials.');
         return;
       }
 
-      // Step 3: Fetch attendance data
-      const attendanceUrl = `${erpUrl}/stu_getSubjectOnChangeWithSemId1.json`;
-      const attendanceResponse = await fetch(attendanceUrl, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-
-      if (!attendanceResponse.ok) {
-        // Try accessing the attendance page first
-        await fetch(`${erpUrl}/studentSubjectAttendance.htm`, {
-          credentials: 'include',
-        });
-
-        // Retry fetching attendance
-        const retryResponse = await fetch(attendanceUrl, {
-          method: 'GET',
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/json',
-          },
-        });
-
-        if (!retryResponse.ok) {
-          throw new Error('Failed to fetch attendance data');
-        }
-
-        const rawData = await retryResponse.json();
-        processAttendanceData(rawData);
-      } else {
-        const rawData = await attendanceResponse.json();
-        processAttendanceData(rawData);
+      // Check if login succeeded (redirected to dashboard or home)
+      if (!url.includes('login') && !url.includes('j_spring_security_check')) {
+        // Login succeeded, now fetch attendance
+        setAuthStep('fetch');
+        // Navigate to attendance page first
+        setWebViewUrl(`${erpUrl}/studentSubjectAttendance.htm`);
       }
+    }
+  };
 
-    } catch (error) {
-      console.error('Error:', error);
-      Alert.alert(
-        'Connection Error',
-        `Failed to connect to ERP.\n\nError: ${error.message}\n\nPlease check:\n• Internet connection\n• ERP URL is correct\n• Credentials are correct`
-      );
-    } finally {
-      setLoading(false);
+  // Handle WebView load end
+  const handleWebViewLoad = () => {
+    if (authStep === 'login' && webViewRef.current) {
+      // Inject login script
+      webViewRef.current.injectJavaScript(getLoginScript());
+    } else if (authStep === 'fetch' && webViewRef.current) {
+      // Fetch attendance data
+      setTimeout(() => {
+        webViewRef.current.injectJavaScript(getFetchScript());
+      }, 1000);
+    }
+  };
+
+  // Handle messages from WebView
+  const handleWebViewMessage = (event) => {
+    try {
+      const message = JSON.parse(event.nativeEvent.data);
+
+      if (message.type === 'attendance') {
+        processAttendanceData(message.data);
+        setAuthStep(null);
+        setWebViewUrl(null);
+      } else if (message.type === 'error') {
+        Alert.alert('Error', 'Failed to fetch attendance data');
+        setLoading(false);
+        setAuthStep(null);
+        setWebViewUrl(null);
+      }
+    } catch (e) {
+      console.log('Message parse error:', e);
     }
   };
 
@@ -276,12 +298,13 @@ export default function App() {
 
   const logout = async () => {
     await AsyncStorage.clear();
-    await CookieManager.clearAll();
     setIsLoggedIn(false);
     setSubjects([]);
     setStudentInfo(null);
     setPassword('');
     setShowSettings(false);
+    setWebViewUrl(null);
+    setAuthStep(null);
   };
 
   // Calculate threshold for a subject
@@ -507,6 +530,23 @@ export default function App() {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
+
+        {/* Hidden WebView for authentication */}
+        {webViewUrl && (
+          <WebView
+            ref={webViewRef}
+            source={{ uri: webViewUrl }}
+            style={{ height: 0, width: 0, opacity: 0 }}
+            onNavigationStateChange={handleNavigationChange}
+            onLoadEnd={handleWebViewLoad}
+            onMessage={handleWebViewMessage}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            sharedCookiesEnabled={true}
+            thirdPartyCookiesEnabled={true}
+          />
+        )}
+
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={{ flex: 1 }}
