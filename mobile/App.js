@@ -11,11 +11,11 @@ import {
   Alert,
   SafeAreaView,
   Image,
+  ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const DEFAULT_URL = '';
-
-// Custom Splash Screen Component
+// Splash Screen Component
 function SplashScreen() {
   return (
     <View style={splashStyles.container}>
@@ -57,13 +57,21 @@ const splashStyles = StyleSheet.create({
 });
 
 export default function App() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [serverUrl, setServerUrl] = useState(DEFAULT_URL);
   const [showSettings, setShowSettings] = useState(false);
+
+  // Login credentials
+  const [erpUrl, setErpUrl] = useState('https://erp.cmrit.ac.in');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+
+  // Student & attendance data
+  const [studentInfo, setStudentInfo] = useState(null);
+  const [subjects, setSubjects] = useState([]);
+  const [lastFetched, setLastFetched] = useState(null);
 
   // Threshold settings
   const [defaultThreshold, setDefaultThreshold] = useState('70');
@@ -75,41 +83,162 @@ export default function App() {
   const [newKeyword, setNewKeyword] = useState('');
   const [newThreshold, setNewThreshold] = useState('');
 
-  const fetchData = async (refresh = false) => {
-    try {
-      if (refresh) setRefreshing(true);
-      else setLoading(true);
-
-      const url = `${serverUrl}/api/attendance`;
-      const res = await fetch(url);
-      const json = await res.json();
-
-      if (json.success === false) {
-        Alert.alert('Error', json.error);
-      } else {
-        setData(json);
-      }
-    } catch (err) {
-      Alert.alert('Connection Error', `Cannot connect to ${serverUrl}\n\nMake sure the backend is running.`);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
+  // Load saved data on start
   useEffect(() => {
-    // Show splash for 2 seconds
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-    }, 2000);
+    loadSavedData();
+    const timer = setTimeout(() => setShowSplash(false), 2000);
     return () => clearTimeout(timer);
   }, []);
 
-  useEffect(() => {
-    if (!showSplash) {
-      fetchData();
+  const loadSavedData = async () => {
+    try {
+      const savedErpUrl = await AsyncStorage.getItem('erpUrl');
+      const savedUsername = await AsyncStorage.getItem('username');
+      const savedSubjects = await AsyncStorage.getItem('subjects');
+      const savedStudentInfo = await AsyncStorage.getItem('studentInfo');
+      const savedThreshold = await AsyncStorage.getItem('defaultThreshold');
+
+      if (savedErpUrl) setErpUrl(savedErpUrl);
+      if (savedUsername) setUsername(savedUsername);
+      if (savedThreshold) setDefaultThreshold(savedThreshold);
+      if (savedSubjects) {
+        setSubjects(JSON.parse(savedSubjects));
+        setIsLoggedIn(true);
+      }
+      if (savedStudentInfo) setStudentInfo(JSON.parse(savedStudentInfo));
+    } catch (e) {
+      console.log('Error loading saved data:', e);
     }
-  }, [showSplash, serverUrl]);
+  };
+
+  const saveData = async (subjectsData, studentData) => {
+    try {
+      await AsyncStorage.setItem('erpUrl', erpUrl);
+      await AsyncStorage.setItem('username', username);
+      await AsyncStorage.setItem('subjects', JSON.stringify(subjectsData));
+      await AsyncStorage.setItem('studentInfo', JSON.stringify(studentData));
+      await AsyncStorage.setItem('defaultThreshold', defaultThreshold);
+    } catch (e) {
+      console.log('Error saving data:', e);
+    }
+  };
+
+  const loginAndFetchAttendance = async () => {
+    if (!erpUrl || !username || !password) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      // Step 1: Login to ERP
+      const loginUrl = `${erpUrl}/login.htm`;
+      const loginData = new URLSearchParams();
+      loginData.append('j_username', username);
+      loginData.append('j_password', password);
+
+      const loginResponse = await fetch(loginUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: loginData.toString(),
+        credentials: 'include',
+      });
+
+      // Check if login was successful by trying to access dashboard
+      const dashboardResponse = await fetch(`${erpUrl}/studentDashboard.htm`, {
+        credentials: 'include',
+      });
+
+      if (dashboardResponse.url.includes('login')) {
+        Alert.alert('Login Failed', 'Invalid username or password');
+        setLoading(false);
+        return;
+      }
+
+      // Step 2: Navigate to attendance page to trigger API call
+      await fetch(`${erpUrl}/studentSubjectAttendance.htm`, {
+        credentials: 'include',
+      });
+
+      // Step 3: Fetch attendance data from API
+      const attendanceUrl = `${erpUrl}/stu_getSubjectOnChangeWithSemId1.json`;
+      const attendanceResponse = await fetch(attendanceUrl, {
+        credentials: 'include',
+      });
+
+      if (!attendanceResponse.ok) {
+        throw new Error('Failed to fetch attendance');
+      }
+
+      const rawData = await attendanceResponse.json();
+
+      // Process attendance data
+      const processedSubjects = rawData.map(item => {
+        const present = parseInt(item.presentCount) || 0;
+        const absent = parseInt(item.absentCount) || 0;
+        const total = present + absent;
+        const percentage = total > 0 ? (present / total * 100) : 0;
+
+        return {
+          subject: item.subject || 'Unknown',
+          subject_code: item.subjectCode || '',
+          present,
+          absent,
+          total,
+          percentage: Math.round(percentage * 100) / 100,
+          faculty: (item.facultName || '').trim(),
+        };
+      });
+
+      // Extract student info from first record or dashboard
+      const studentData = {
+        name: rawData[0]?.studentName || username.split('@')[0],
+        rollNumber: rawData[0]?.rollNumber || '',
+        branch: rawData[0]?.branchName || '',
+        section: rawData[0]?.sectionName || '',
+        institution: 'CMR Institute of Technology',
+      };
+
+      setSubjects(processedSubjects);
+      setStudentInfo(studentData);
+      setLastFetched(new Date().toISOString());
+      setIsLoggedIn(true);
+
+      // Save for offline access
+      saveData(processedSubjects, studentData);
+
+      Alert.alert('Success', `Fetched ${processedSubjects.length} subjects!`);
+
+    } catch (error) {
+      console.error('Error:', error);
+      Alert.alert('Error', `Failed to connect: ${error.message}\n\nMake sure you're connected to internet and credentials are correct.`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshAttendance = async () => {
+    if (!password) {
+      Alert.alert('Re-login Required', 'Please enter your password to refresh');
+      setShowSettings(true);
+      return;
+    }
+    setRefreshing(true);
+    await loginAndFetchAttendance();
+    setRefreshing(false);
+  };
+
+  const logout = async () => {
+    await AsyncStorage.clear();
+    setIsLoggedIn(false);
+    setSubjects([]);
+    setStudentInfo(null);
+    setPassword('');
+    setShowSettings(false);
+  };
 
   // Calculate threshold for a subject
   const getThresholdForSubject = (subjectCode, subjectName) => {
@@ -133,28 +262,22 @@ export default function App() {
     return 'LOW';
   };
 
-  // Calculate classes needed
   const getClassesNeeded = (present, total, threshold) => {
     const thresholdDecimal = threshold / 100;
     const current = total > 0 ? present / total : 0;
     if (current >= thresholdDecimal) return 0;
-
     const numerator = thresholdDecimal * total - present;
     const denominator = 1 - thresholdDecimal;
     if (denominator === 0) return 0;
-
     return Math.ceil(numerator / denominator);
   };
 
-  // Calculate classes can miss
   const getClassesCanMiss = (present, total, threshold) => {
     const thresholdDecimal = threshold / 100;
     const current = total > 0 ? present / total : 0;
     if (current < thresholdDecimal) return 0;
-
     const numerator = present - thresholdDecimal * total;
     if (thresholdDecimal === 0) return 0;
-
     return Math.floor(numerator / thresholdDecimal);
   };
 
@@ -193,6 +316,7 @@ export default function App() {
     return <SplashScreen />;
   }
 
+  // Settings Screen
   if (showSettings) {
     return (
       <SafeAreaView style={styles.container}>
@@ -201,15 +325,34 @@ export default function App() {
           <View style={styles.settingsContainer}>
             <Text style={styles.settingsTitle}>Settings</Text>
 
-            {/* Server Settings */}
-            <Text style={styles.sectionHeader}>Server Connection</Text>
-            <Text style={styles.settingsLabel}>Backend URL:</Text>
+            {/* ERP Settings */}
+            <Text style={styles.sectionHeader}>ERP Connection</Text>
+            <Text style={styles.settingsLabel}>ERP URL:</Text>
             <TextInput
               style={styles.input}
-              value={serverUrl}
-              onChangeText={setServerUrl}
-              placeholder="http://192.168.1.100:5050"
+              value={erpUrl}
+              onChangeText={setErpUrl}
+              placeholder="https://erp.cmrit.ac.in"
               autoCapitalize="none"
+            />
+
+            <Text style={styles.settingsLabel}>Username (Email):</Text>
+            <TextInput
+              style={styles.input}
+              value={username}
+              onChangeText={setUsername}
+              placeholder="your.email@cmrit.ac.in"
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+
+            <Text style={styles.settingsLabel}>Password:</Text>
+            <TextInput
+              style={styles.input}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Enter password to refresh"
+              secureTextEntry
             />
 
             {/* Threshold Settings */}
@@ -234,7 +377,7 @@ export default function App() {
               ))}
             </View>
 
-            <Text style={styles.settingsLabel}>Safe Buffer (above threshold):</Text>
+            <Text style={styles.settingsLabel}>Safe Buffer:</Text>
             <View style={styles.thresholdRow}>
               {['5', '10', '15'].map((val) => (
                 <TouchableOpacity
@@ -256,7 +399,7 @@ export default function App() {
             {/* Custom Subject Thresholds */}
             <Text style={styles.sectionHeader}>Custom Subject Rules</Text>
             <Text style={styles.settingsHint}>
-              Set different thresholds for specific subjects (e.g., TYL, Lab)
+              Set different thresholds for specific subjects
             </Text>
 
             {customThresholds.map((item, index) => (
@@ -275,7 +418,7 @@ export default function App() {
                 style={[styles.input, { flex: 1, marginRight: 8 }]}
                 value={newKeyword}
                 onChangeText={setNewKeyword}
-                placeholder="Keyword (e.g., TYL)"
+                placeholder="Keyword"
               />
               <TextInput
                 style={[styles.input, { width: 70, marginRight: 8 }]}
@@ -292,35 +435,19 @@ export default function App() {
             {/* Save Button */}
             <TouchableOpacity
               style={styles.saveButton}
-              onPress={() => {
-                setShowSettings(false);
-                fetchData();
-              }}
+              onPress={() => setShowSettings(false)}
             >
-              <Text style={styles.saveButtonText}>Save & Apply</Text>
+              <Text style={styles.saveButtonText}>Done</Text>
             </TouchableOpacity>
 
             {/* Logout Button */}
             <TouchableOpacity
               style={styles.logoutButton}
               onPress={() => {
-                Alert.alert(
-                  'Logout',
-                  'Are you sure you want to logout?',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Logout',
-                      style: 'destructive',
-                      onPress: () => {
-                        setData(null);
-                        setServerUrl('');
-                        setShowSettings(false);
-                        setIsLoggedIn(false);
-                      }
-                    },
-                  ]
-                );
+                Alert.alert('Logout', 'Are you sure?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Logout', style: 'destructive', onPress: logout },
+                ]);
               }}
             >
               <Text style={styles.logoutButtonText}>Logout</Text>
@@ -336,68 +463,72 @@ export default function App() {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
-        <View style={styles.loginContainer}>
-          <Image
-            source={require('./assets/icon.png')}
-            style={styles.loginLogo}
-            resizeMode="contain"
-          />
-          <Text style={styles.loginTitle}>UniTrack</Text>
-          <Text style={styles.loginSubtitle}>Universal Attendance Tracker</Text>
-
-          <View style={styles.loginForm}>
-            <Text style={styles.loginLabel}>Backend Server URL</Text>
-            <TextInput
-              style={styles.loginInput}
-              value={serverUrl}
-              onChangeText={setServerUrl}
-              placeholder="http://192.168.1.100:5050"
-              placeholderTextColor="#999"
-              autoCapitalize="none"
+        <ScrollView contentContainerStyle={styles.loginScrollContent}>
+          <View style={styles.loginContainer}>
+            <Image
+              source={require('./assets/icon.png')}
+              style={styles.loginLogo}
+              resizeMode="contain"
             />
+            <Text style={styles.loginTitle}>UniTrack</Text>
+            <Text style={styles.loginSubtitle}>Universal Attendance Tracker</Text>
 
-            <View style={styles.instructionBox}>
-              <Text style={styles.instructionTitle}>How to get this URL?</Text>
-              <Text style={styles.instructionStep}>1. On your computer, run the UniTrack backend:</Text>
-              <Text style={styles.instructionCode}>python -m unitrack.cli.main serve --host 0.0.0.0</Text>
-              <Text style={styles.instructionStep}>2. Find your computer's IP address</Text>
-              <Text style={styles.instructionStep}>3. Enter it above as: http://YOUR_IP:5050</Text>
-              <Text style={styles.instructionNote}>Both devices must be on the same WiFi network</Text>
+            <View style={styles.loginForm}>
+              <Text style={styles.loginLabel}>ERP URL</Text>
+              <TextInput
+                style={styles.loginInput}
+                value={erpUrl}
+                onChangeText={setErpUrl}
+                placeholder="https://erp.cmrit.ac.in"
+                placeholderTextColor="#999"
+                autoCapitalize="none"
+              />
+
+              <Text style={styles.loginLabel}>Username (Email)</Text>
+              <TextInput
+                style={styles.loginInput}
+                value={username}
+                onChangeText={setUsername}
+                placeholder="your.email@cmrit.ac.in"
+                placeholderTextColor="#999"
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+
+              <Text style={styles.loginLabel}>Password</Text>
+              <TextInput
+                style={styles.loginInput}
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Enter your ERP password"
+                placeholderTextColor="#999"
+                secureTextEntry
+              />
+
+              <TouchableOpacity
+                style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+                onPress={loginAndFetchAttendance}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.loginButtonText}>Login & Fetch Attendance</Text>
+                )}
+              </TouchableOpacity>
+
+              <Text style={styles.loginNote}>
+                Your credentials are stored locally and used only to fetch attendance from your ERP.
+              </Text>
             </View>
-
-            <TouchableOpacity
-              style={styles.loginButton}
-              onPress={() => {
-                if (serverUrl) {
-                  setIsLoggedIn(true);
-                  setShowSplash(true);
-                  setTimeout(() => setShowSplash(false), 1500);
-                } else {
-                  Alert.alert('Error', 'Please enter a server URL');
-                }
-              }}
-            >
-              <Text style={styles.loginButtonText}>Connect</Text>
-            </TouchableOpacity>
           </View>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar style="dark" />
-        <View style={styles.centered}>
-          <Text style={styles.loadingText}>Loading...</Text>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
 
   // Process subjects with custom thresholds
-  const processedSubjects = data?.subjects?.map(subject => {
+  const processedSubjects = subjects.map(subject => {
     const threshold = getThresholdForSubject(subject.subject_code, subject.subject);
     const status = getStatus(subject.percentage, threshold);
     const classesNeeded = getClassesNeeded(subject.present, subject.total, threshold);
@@ -410,7 +541,7 @@ export default function App() {
       classes_needed: classesNeeded,
       classes_can_miss: classesCanMiss,
     };
-  }) || [];
+  });
 
   // Calculate summary
   const summary = {
@@ -424,8 +555,7 @@ export default function App() {
     ? ((summary.overall_present / summary.overall_total) * 100).toFixed(2)
     : 0;
 
-  const { institution, studentName, rollNumber, branch, section, lastFetched } = data || {};
-
+  // Dashboard
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
@@ -433,9 +563,9 @@ export default function App() {
       {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>{institution || 'UniTrack'}</Text>
-          <Text style={styles.headerSubtitle}>{studentName} ({rollNumber})</Text>
-          <Text style={styles.headerInfo}>{branch} | Section {section}</Text>
+          <Text style={styles.headerTitle}>{studentInfo?.institution || 'UniTrack'}</Text>
+          <Text style={styles.headerSubtitle}>{studentInfo?.name} ({studentInfo?.rollNumber})</Text>
+          <Text style={styles.headerInfo}>{studentInfo?.branch} | Section {studentInfo?.section}</Text>
         </View>
         <TouchableOpacity onPress={() => setShowSettings(true)} style={styles.settingsButton}>
           <Text style={styles.settingsIcon}>⚙️</Text>
@@ -445,7 +575,7 @@ export default function App() {
       <ScrollView
         style={styles.content}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={() => fetchData(true)} />
+          <RefreshControl refreshing={refreshing} onRefresh={refreshAttendance} />
         }
       >
         {/* Threshold Info */}
@@ -480,7 +610,7 @@ export default function App() {
         </View>
 
         {/* Subject List */}
-        <Text style={styles.sectionTitle}>Subjects</Text>
+        <Text style={styles.sectionTitle}>Subjects ({processedSubjects.length})</Text>
 
         {processedSubjects.map((subject, idx) => {
           const statusStyle = getStatusStyle(subject.status);
@@ -544,7 +674,7 @@ export default function App() {
         <Text style={styles.footer}>
           Last updated: {lastFetched ? new Date(lastFetched).toLocaleString() : 'Never'}
         </Text>
-        <Text style={styles.footerHint}>Pull down to refresh</Text>
+        <Text style={styles.footerHint}>Pull down to refresh (requires password)</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -573,7 +703,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   headerTitle: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#fff',
   },
@@ -806,7 +936,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
-    marginBottom: 8,
+    marginBottom: 12,
   },
   thresholdRow: {
     flexDirection: 'row',
@@ -891,28 +1021,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   // Login Screen Styles
+  loginScrollContent: {
+    flexGrow: 1,
+  },
   loginContainer: {
     flex: 1,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
+    paddingTop: 60,
   },
   loginLogo: {
-    width: 120,
-    height: 120,
-    marginBottom: 20,
+    width: 100,
+    height: 100,
+    marginBottom: 16,
   },
   loginTitle: {
-    fontSize: 36,
+    fontSize: 32,
     fontWeight: '800',
     color: '#1f2937',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   loginSubtitle: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#6b7280',
-    marginBottom: 40,
+    marginBottom: 30,
   },
   loginForm: {
     width: '100%',
@@ -929,67 +1063,38 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#374151',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   loginInput: {
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
     borderRadius: 8,
     padding: 14,
     fontSize: 16,
-    marginBottom: 8,
+    marginBottom: 16,
     color: '#1f2937',
-  },
-  loginHint: {
-    fontSize: 12,
-    color: '#9ca3af',
-    marginBottom: 24,
-  },
-  instructionBox: {
-    backgroundColor: '#eff6ff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#2563eb',
-  },
-  instructionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#1e40af',
-    marginBottom: 12,
-  },
-  instructionStep: {
-    fontSize: 13,
-    color: '#374151',
-    marginBottom: 6,
-    lineHeight: 18,
-  },
-  instructionCode: {
-    fontSize: 12,
-    fontFamily: 'monospace',
-    backgroundColor: '#1f2937',
-    color: '#22c55e',
-    padding: 8,
-    borderRadius: 6,
-    marginBottom: 10,
-    marginTop: 4,
-    overflow: 'hidden',
-  },
-  instructionNote: {
-    fontSize: 11,
-    color: '#6b7280',
-    fontStyle: 'italic',
-    marginTop: 8,
   },
   loginButton: {
     backgroundColor: '#2563eb',
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
+    marginTop: 8,
+  },
+  loginButtonDisabled: {
+    backgroundColor: '#93c5fd',
   },
   loginButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  loginNote: {
+    fontSize: 11,
+    color: '#9ca3af',
+    textAlign: 'center',
+    marginTop: 16,
+    lineHeight: 16,
   },
 });
