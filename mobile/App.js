@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -7,14 +7,16 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
+  TextInput,
   Alert,
   SafeAreaView,
   Image,
   ActivityIndicator,
-  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { WebView } from 'react-native-webview';
+import CookieManager from '@react-native-cookies/cookies';
 
 // Splash Screen Component
 function SplashScreen() {
@@ -63,12 +65,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showWebView, setShowWebView] = useState(false);
 
-  const webViewRef = useRef(null);
-
-  // ERP URL
+  // Login credentials
   const [erpUrl, setErpUrl] = useState('https://erp.cmrit.ac.in');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   // Student & attendance data
   const [studentInfo, setStudentInfo] = useState(null);
@@ -94,10 +96,16 @@ export default function App() {
 
   const loadSavedData = async () => {
     try {
+      const savedErpUrl = await AsyncStorage.getItem('erpUrl');
+      const savedUsername = await AsyncStorage.getItem('username');
       const savedSubjects = await AsyncStorage.getItem('subjects');
       const savedStudentInfo = await AsyncStorage.getItem('studentInfo');
       const savedThreshold = await AsyncStorage.getItem('defaultThreshold');
+      const savedPassword = await AsyncStorage.getItem('password');
 
+      if (savedErpUrl) setErpUrl(savedErpUrl);
+      if (savedUsername) setUsername(savedUsername);
+      if (savedPassword) setPassword(savedPassword);
       if (savedThreshold) setDefaultThreshold(savedThreshold);
       if (savedSubjects) {
         setSubjects(JSON.parse(savedSubjects));
@@ -111,6 +119,9 @@ export default function App() {
 
   const saveData = async (subjectsData, studentData) => {
     try {
+      await AsyncStorage.setItem('erpUrl', erpUrl);
+      await AsyncStorage.setItem('username', username);
+      await AsyncStorage.setItem('password', password);
       await AsyncStorage.setItem('subjects', JSON.stringify(subjectsData));
       await AsyncStorage.setItem('studentInfo', JSON.stringify(studentData));
       await AsyncStorage.setItem('defaultThreshold', defaultThreshold);
@@ -119,104 +130,158 @@ export default function App() {
     }
   };
 
-  // JavaScript to inject into WebView to fetch attendance
-  const fetchAttendanceScript = `
-    (function() {
-      fetch('${erpUrl}/stu_getSubjectOnChangeWithSemId1.json', {
-        credentials: 'include'
-      })
-      .then(response => response.json())
-      .then(data => {
-        window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'attendance',
-          data: data
-        }));
-      })
-      .catch(error => {
-        window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'error',
-          message: error.toString()
-        }));
-      });
-    })();
-    true;
-  `;
+  const loginAndFetchAttendance = async () => {
+    if (!erpUrl || !username || !password) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
 
-  const handleWebViewMessage = (event) => {
+    setLoading(true);
+
     try {
-      const message = JSON.parse(event.nativeEvent.data);
+      // Clear any existing cookies first
+      await CookieManager.clearAll();
 
-      if (message.type === 'attendance' && Array.isArray(message.data)) {
-        const rawData = message.data;
+      // Step 1: Get login page to establish session
+      const loginPageResponse = await fetch(`${erpUrl}/login.htm`, {
+        method: 'GET',
+        credentials: 'include',
+      });
 
-        // Process attendance data
-        const processedSubjects = rawData.map(item => {
-          const present = parseInt(item.presentCount) || 0;
-          const absent = parseInt(item.absentCount) || 0;
-          const total = present + absent;
-          const percentage = total > 0 ? (present / total * 100) : 0;
+      // Step 2: Login with Spring Security endpoint
+      const loginUrl = `${erpUrl}/j_spring_security_check`;
+      const formData = `j_username=${encodeURIComponent(username)}&j_password=${encodeURIComponent(password)}`;
 
-          return {
-            subject: item.subject || 'Unknown',
-            subject_code: item.subjectCode || '',
-            present,
-            absent,
-            total,
-            percentage: Math.round(percentage * 100) / 100,
-            faculty: (item.facultName || '').trim(),
-          };
+      const loginResponse = await fetch(loginUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        body: formData,
+        credentials: 'include',
+        redirect: 'follow',
+      });
+
+      // Check if we got redirected back to login (failed) or to dashboard (success)
+      const finalUrl = loginResponse.url;
+
+      if (finalUrl.includes('login') || finalUrl.includes('error') || finalUrl.includes('authfailed')) {
+        Alert.alert('Login Failed', 'Invalid username or password. Please check your credentials.');
+        setLoading(false);
+        return;
+      }
+
+      // Step 3: Fetch attendance data
+      const attendanceUrl = `${erpUrl}/stu_getSubjectOnChangeWithSemId1.json`;
+      const attendanceResponse = await fetch(attendanceUrl, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!attendanceResponse.ok) {
+        // Try accessing the attendance page first
+        await fetch(`${erpUrl}/studentSubjectAttendance.htm`, {
+          credentials: 'include',
         });
 
-        // Extract student info
-        const studentData = {
-          name: rawData[0]?.studentName || 'Student',
-          rollNumber: rawData[0]?.rollNumber || '',
-          branch: rawData[0]?.branchName || '',
-          section: rawData[0]?.sectionName || '',
-          institution: 'CMR Institute of Technology',
-        };
+        // Retry fetching attendance
+        const retryResponse = await fetch(attendanceUrl, {
+          method: 'GET',
+          credentials: 'include',
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
 
-        setSubjects(processedSubjects);
-        setStudentInfo(studentData);
-        setLastFetched(new Date().toISOString());
-        setIsLoggedIn(true);
-        setShowWebView(false);
-        setLoading(false);
+        if (!retryResponse.ok) {
+          throw new Error('Failed to fetch attendance data');
+        }
 
-        // Save for offline access
-        saveData(processedSubjects, studentData);
-
-        Alert.alert('Success', `Fetched ${processedSubjects.length} subjects!`);
-      } else if (message.type === 'error') {
-        Alert.alert('Error', 'Failed to fetch attendance. Make sure you are logged in.');
-        setLoading(false);
+        const rawData = await retryResponse.json();
+        processAttendanceData(rawData);
+      } else {
+        const rawData = await attendanceResponse.json();
+        processAttendanceData(rawData);
       }
-    } catch (e) {
-      console.log('Message parse error:', e);
+
+    } catch (error) {
+      console.error('Error:', error);
+      Alert.alert(
+        'Connection Error',
+        `Failed to connect to ERP.\n\nError: ${error.message}\n\nPlease check:\n• Internet connection\n• ERP URL is correct\n• Credentials are correct`
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleNavigationChange = (navState) => {
-    // Check if user is on dashboard (logged in successfully)
-    if (navState.url.includes('Dashboard') || navState.url.includes('dashboard')) {
-      // User logged in, now fetch attendance
-      setLoading(true);
-      setTimeout(() => {
-        webViewRef.current?.injectJavaScript(fetchAttendanceScript);
-      }, 1000);
+  const processAttendanceData = (rawData) => {
+    if (!Array.isArray(rawData) || rawData.length === 0) {
+      Alert.alert('Error', 'No attendance data found');
+      return;
     }
+
+    // Process attendance data
+    const processedSubjects = rawData.map(item => {
+      const present = parseInt(item.presentCount) || 0;
+      const absent = parseInt(item.absentCount) || 0;
+      const total = present + absent;
+      const percentage = total > 0 ? (present / total * 100) : 0;
+
+      return {
+        subject: item.subject || 'Unknown',
+        subject_code: item.subjectCode || '',
+        present,
+        absent,
+        total,
+        percentage: Math.round(percentage * 100) / 100,
+        faculty: (item.facultName || '').trim(),
+      };
+    });
+
+    // Extract student info
+    const studentData = {
+      name: rawData[0]?.studentName || username.split('@')[0],
+      rollNumber: rawData[0]?.rollNumber || '',
+      branch: rawData[0]?.branchName || '',
+      section: rawData[0]?.sectionName || '',
+      institution: 'CMR Institute of Technology',
+    };
+
+    setSubjects(processedSubjects);
+    setStudentInfo(studentData);
+    setLastFetched(new Date().toISOString());
+    setIsLoggedIn(true);
+
+    // Save for offline access
+    saveData(processedSubjects, studentData);
+
+    Alert.alert('Success', `Fetched ${processedSubjects.length} subjects!`);
+  };
+
+  const refreshAttendance = async () => {
+    if (!password) {
+      Alert.alert('Password Required', 'Please enter your password in settings to refresh');
+      setShowSettings(true);
+      return;
+    }
+    setRefreshing(true);
+    await loginAndFetchAttendance();
+    setRefreshing(false);
   };
 
   const logout = async () => {
     await AsyncStorage.clear();
+    await CookieManager.clearAll();
     setIsLoggedIn(false);
     setSubjects([]);
     setStudentInfo(null);
+    setPassword('');
     setShowSettings(false);
-  };
-
-  const refreshAttendance = () => {
-    setShowWebView(true);
   };
 
   // Calculate threshold for a subject
@@ -295,39 +360,6 @@ export default function App() {
     return <SplashScreen />;
   }
 
-  // WebView Login Modal
-  if (showWebView) {
-    return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#2563eb' }}>
-        <StatusBar style="light" />
-        <View style={styles.webViewHeader}>
-          <TouchableOpacity onPress={() => setShowWebView(false)}>
-            <Text style={styles.webViewClose}>✕ Cancel</Text>
-          </TouchableOpacity>
-          <Text style={styles.webViewTitle}>Login to ERP</Text>
-          <View style={{ width: 70 }} />
-        </View>
-        {loading && (
-          <View style={styles.webViewLoading}>
-            <ActivityIndicator color="#2563eb" size="large" />
-            <Text style={styles.webViewLoadingText}>Fetching attendance...</Text>
-          </View>
-        )}
-        <WebView
-          ref={webViewRef}
-          source={{ uri: `${erpUrl}/login.htm` }}
-          onNavigationStateChange={handleNavigationChange}
-          onMessage={handleWebViewMessage}
-          style={{ flex: 1, opacity: loading ? 0.3 : 1 }}
-          javaScriptEnabled={true}
-          domStorageEnabled={true}
-          sharedCookiesEnabled={true}
-          thirdPartyCookiesEnabled={true}
-        />
-      </SafeAreaView>
-    );
-  }
-
   // Settings Screen
   if (showSettings) {
     return (
@@ -336,6 +368,36 @@ export default function App() {
         <ScrollView style={styles.settingsScroll}>
           <View style={styles.settingsContainer}>
             <Text style={styles.settingsTitle}>Settings</Text>
+
+            {/* ERP Settings */}
+            <Text style={styles.sectionHeader}>ERP Connection</Text>
+            <Text style={styles.settingsLabel}>ERP URL:</Text>
+            <TextInput
+              style={styles.input}
+              value={erpUrl}
+              onChangeText={setErpUrl}
+              placeholder="https://erp.cmrit.ac.in"
+              autoCapitalize="none"
+            />
+
+            <Text style={styles.settingsLabel}>Username (Email):</Text>
+            <TextInput
+              style={styles.input}
+              value={username}
+              onChangeText={setUsername}
+              placeholder="your.email@cmrit.ac.in"
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+
+            <Text style={styles.settingsLabel}>Password:</Text>
+            <TextInput
+              style={styles.input}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Enter password to refresh"
+              secureTextEntry
+            />
 
             {/* Threshold Settings */}
             <Text style={styles.sectionHeader}>Attendance Thresholds</Text>
@@ -395,6 +457,25 @@ export default function App() {
               </View>
             ))}
 
+            <View style={styles.addCustomRow}>
+              <TextInput
+                style={[styles.input, { flex: 1, marginRight: 8 }]}
+                value={newKeyword}
+                onChangeText={setNewKeyword}
+                placeholder="Keyword"
+              />
+              <TextInput
+                style={[styles.input, { width: 70, marginRight: 8 }]}
+                value={newThreshold}
+                onChangeText={setNewThreshold}
+                placeholder="%"
+                keyboardType="numeric"
+              />
+              <TouchableOpacity style={styles.addButton} onPress={addCustomThreshold}>
+                <Text style={styles.addButtonText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+
             {/* Save Button */}
             <TouchableOpacity
               style={styles.saveButton}
@@ -421,37 +502,87 @@ export default function App() {
     );
   }
 
-  // Login Screen (shows WebView button)
+  // Login Screen
   if (!isLoggedIn) {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
-        <View style={styles.loginContainer}>
-          <Image
-            source={require('./assets/icon.png')}
-            style={styles.loginLogo}
-            resizeMode="contain"
-          />
-          <Text style={styles.loginTitle}>UniTrack</Text>
-          <Text style={styles.loginSubtitle}>University Attendance Tracker</Text>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <ScrollView
+            contentContainerStyle={styles.loginScrollContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.loginContainer}>
+              <Image
+                source={require('./assets/icon.png')}
+                style={styles.loginLogo}
+                resizeMode="contain"
+              />
+              <Text style={styles.loginTitle}>UniTrack</Text>
+              <Text style={styles.loginSubtitle}>University Attendance Tracker</Text>
 
-          <View style={styles.loginForm}>
-            <Text style={styles.loginDescription}>
-              Track your attendance from your college ERP system. Login securely through your ERP portal.
-            </Text>
+              <View style={styles.loginForm}>
+                <Text style={styles.loginLabel}>ERP URL</Text>
+                <TextInput
+                  style={styles.loginInput}
+                  value={erpUrl}
+                  onChangeText={setErpUrl}
+                  placeholder="https://erp.cmrit.ac.in"
+                  placeholderTextColor="#999"
+                  autoCapitalize="none"
+                />
 
-            <TouchableOpacity
-              style={styles.loginButton}
-              onPress={() => setShowWebView(true)}
-            >
-              <Text style={styles.loginButtonText}>Login with ERP</Text>
-            </TouchableOpacity>
+                <Text style={styles.loginLabel}>Username (Email)</Text>
+                <TextInput
+                  style={styles.loginInput}
+                  value={username}
+                  onChangeText={setUsername}
+                  placeholder="your.email@cmrit.ac.in"
+                  placeholderTextColor="#999"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
 
-            <Text style={styles.loginNote}>
-              You'll be redirected to your ERP login page. Your credentials are never stored by this app.
-            </Text>
-          </View>
-        </View>
+                <Text style={styles.loginLabel}>Password</Text>
+                <View style={styles.passwordContainer}>
+                  <TextInput
+                    style={styles.passwordInput}
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="Enter your ERP password"
+                    placeholderTextColor="#999"
+                    secureTextEntry={!showPassword}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeButton}
+                    onPress={() => setShowPassword(!showPassword)}
+                  >
+                    <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁️'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+                  onPress={loginAndFetchAttendance}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.loginButtonText}>Login & Fetch Attendance</Text>
+                  )}
+                </TouchableOpacity>
+
+                <Text style={styles.loginNote}>
+                  Your credentials are stored securely on your device only.
+                </Text>
+              </View>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
@@ -599,18 +730,11 @@ export default function App() {
           );
         })}
 
-        {/* Refresh Button */}
-        <TouchableOpacity
-          style={styles.refreshButton}
-          onPress={refreshAttendance}
-        >
-          <Text style={styles.refreshButtonText}>🔄 Refresh Attendance</Text>
-        </TouchableOpacity>
-
         {/* Footer */}
         <Text style={styles.footer}>
           Last updated: {lastFetched ? new Date(lastFetched).toLocaleString() : 'Never'}
         </Text>
+        <Text style={styles.footerHint}>Pull down to refresh</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -620,35 +744,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f3f4f6',
-  },
-  webViewHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#2563eb',
-  },
-  webViewClose: {
-    color: '#fff',
-    fontSize: 16,
-  },
-  webViewTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  webViewLoading: {
-    position: 'absolute',
-    top: '50%',
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    alignItems: 'center',
-  },
-  webViewLoadingText: {
-    marginTop: 10,
-    color: '#2563eb',
-    fontSize: 16,
   },
   header: {
     backgroundColor: '#2563eb',
@@ -842,25 +937,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
   },
-  refreshButton: {
-    backgroundColor: '#2563eb',
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  refreshButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
   footer: {
     textAlign: 'center',
     color: '#9ca3af',
     fontSize: 12,
     marginTop: 8,
-    marginBottom: 30,
+    marginBottom: 4,
+  },
+  footerHint: {
+    textAlign: 'center',
+    color: '#d1d5db',
+    fontSize: 12,
+    marginBottom: 20,
   },
   settingsScroll: {
     flex: 1,
@@ -890,6 +978,15 @@ const styles = StyleSheet.create({
   settingsHint: {
     fontSize: 12,
     color: '#9ca3af',
+    marginBottom: 12,
+  },
+  input: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
     marginBottom: 12,
   },
   thresholdRow: {
@@ -934,12 +1031,27 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
+  addCustomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  addButton: {
+    backgroundColor: '#22c55e',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  addButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
   saveButton: {
     backgroundColor: '#2563eb',
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
-    marginTop: 24,
+    marginTop: 12,
     marginBottom: 16,
   },
   saveButtonText: {
@@ -960,28 +1072,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   // Login Screen Styles
+  loginScrollContent: {
+    flexGrow: 1,
+  },
   loginContainer: {
     flex: 1,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
+    paddingTop: 60,
   },
   loginLogo: {
-    width: 120,
-    height: 120,
-    marginBottom: 20,
+    width: 100,
+    height: 100,
+    marginBottom: 16,
   },
   loginTitle: {
-    fontSize: 36,
+    fontSize: 32,
     fontWeight: '800',
     color: '#1f2937',
     marginBottom: 4,
   },
   loginSubtitle: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#6b7280',
-    marginBottom: 40,
+    marginBottom: 30,
   },
   loginForm: {
     width: '100%',
@@ -994,29 +1110,63 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
-  loginDescription: {
+  loginLabel: {
     fontSize: 14,
-    color: '#6b7280',
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 22,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 6,
+  },
+  loginInput: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 14,
+    fontSize: 16,
+    marginBottom: 16,
+    color: '#1f2937',
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  passwordInput: {
+    flex: 1,
+    padding: 14,
+    fontSize: 16,
+    color: '#1f2937',
+  },
+  eyeButton: {
+    padding: 14,
+  },
+  eyeIcon: {
+    fontSize: 20,
   },
   loginButton: {
     backgroundColor: '#2563eb',
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
+    marginTop: 8,
+  },
+  loginButtonDisabled: {
+    backgroundColor: '#93c5fd',
   },
   loginButtonText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
   },
   loginNote: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#9ca3af',
     textAlign: 'center',
     marginTop: 16,
-    lineHeight: 18,
+    lineHeight: 16,
   },
 });
