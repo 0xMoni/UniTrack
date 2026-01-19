@@ -135,8 +135,8 @@ export default function App() {
     setLoading(true);
 
     try {
-      // Step 1: Login to ERP
-      const loginUrl = `${erpUrl}/login.htm`;
+      // Step 1: Login to ERP (Spring Security endpoint)
+      const loginUrl = `${erpUrl}/j_spring_security_check`;
       const loginData = new URLSearchParams();
       loginData.append('j_username', username);
       loginData.append('j_password', password);
@@ -148,25 +148,18 @@ export default function App() {
         },
         body: loginData.toString(),
         credentials: 'include',
+        redirect: 'follow',
       });
 
-      // Check if login was successful by trying to access dashboard
-      const dashboardResponse = await fetch(`${erpUrl}/studentDashboard.htm`, {
-        credentials: 'include',
-      });
-
-      if (dashboardResponse.url.includes('login')) {
+      // Check if login was successful
+      const responseUrl = loginResponse.url || '';
+      if (responseUrl.includes('login') || responseUrl.includes('error')) {
         Alert.alert('Login Failed', 'Invalid username or password');
         setLoading(false);
         return;
       }
 
-      // Step 2: Navigate to attendance page to trigger API call
-      await fetch(`${erpUrl}/studentSubjectAttendance.htm`, {
-        credentials: 'include',
-      });
-
-      // Step 3: Fetch attendance data from API
+      // Step 2: Fetch attendance data from API
       const attendanceUrl = `${erpUrl}/stu_getSubjectOnChangeWithSemId1.json`;
       const attendanceResponse = await fetch(attendanceUrl, {
         credentials: 'include',
