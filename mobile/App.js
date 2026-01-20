@@ -212,45 +212,58 @@ export default function App() {
     }
   };
 
-  // Manual fetch button in WebView
-  const manualFetchFromWebView = async () => {
+  // Manual fetch button in WebView - uses WebView to fetch (keeps session)
+  const manualFetchFromWebView = () => {
     setLoading(true);
 
+    // Inject JavaScript to fetch attendance data using WebView's session
+    const fetchScript = `
+      (function() {
+        fetch('${erpUrl}${attendanceEndpoint}')
+          .then(response => response.json())
+          .then(data => {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'attendance',
+              data: data
+            }));
+          })
+          .catch(error => {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'error',
+              message: error.toString()
+            }));
+          });
+      })();
+      true;
+    `;
+
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(fetchScript);
+    }
+  };
+
+  // Handle messages from WebView
+  const handleWebViewMessage = (event) => {
     try {
-      const cookies = await CookieManager.get(erpUrl);
-      const cookieString = Object.entries(cookies)
-        .map(([name, cookie]) => `${name}=${cookie.value}`)
-        .join('; ');
+      const message = JSON.parse(event.nativeEvent.data);
 
-      const attendanceUrl = `${erpUrl}${attendanceEndpoint}`;
-
-      const response = await fetch(attendanceUrl, {
-        method: 'GET',
-        headers: {
-          'Cookie': cookieString,
-          'Accept': 'application/json',
-        },
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      if (message.type === 'attendance') {
+        if (Array.isArray(message.data) && message.data.length > 0) {
+          processAttendanceData(message.data);
+          setShowLoginWebView(false);
+          setLoading(false);
+          Alert.alert('Success', `Fetched ${message.data.length} subjects!`);
+        } else {
+          setLoading(false);
+          Alert.alert('No Data', 'Could not find attendance data. Try navigating to your attendance page first, then tap Fetch Data.');
+        }
+      } else if (message.type === 'error') {
+        setLoading(false);
+        Alert.alert('Error', `Failed to fetch: ${message.message}`);
       }
-
-      const rawData = await response.json();
-
-      if (Array.isArray(rawData) && rawData.length > 0) {
-        processAttendanceData(rawData);
-        setShowLoginWebView(false);
-        Alert.alert('Success', `Fetched ${rawData.length} subjects!`);
-      } else {
-        Alert.alert('No Data', 'Could not find attendance data. Make sure you\'re logged in and try navigating to your attendance page first.');
-      }
-    } catch (error) {
-      console.log('Fetch error:', error);
-      Alert.alert('Error', `Failed to fetch data: ${error.message}\n\nMake sure you're logged in and the attendance endpoint is correct.`);
-    } finally {
-      setLoading(false);
+    } catch (e) {
+      // Not a JSON message, ignore
+      console.log('WebView message:', event.nativeEvent.data);
     }
   };
 
@@ -451,6 +464,7 @@ export default function App() {
           source={{ uri: erpUrl }}
           style={{ flex: 1 }}
           onNavigationStateChange={handleWebViewNavigationChange}
+          onMessage={handleWebViewMessage}
           javaScriptEnabled={true}
           domStorageEnabled={true}
           sharedCookiesEnabled={true}
