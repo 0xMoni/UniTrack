@@ -216,23 +216,48 @@ export default function App() {
   const manualFetchFromWebView = () => {
     setLoading(true);
 
+    // Set a timeout in case fetch hangs
+    setTimeout(() => {
+      setLoading(false);
+    }, 15000);
+
     // Inject JavaScript to fetch attendance data using WebView's session
     const fetchScript = `
       (function() {
-        fetch('${erpUrl}${attendanceEndpoint}')
-          .then(response => response.json())
-          .then(data => {
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'attendance',
-              data: data
-            }));
-          })
-          .catch(error => {
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'error',
-              message: error.toString()
-            }));
-          });
+        try {
+          fetch('${erpUrl}${attendanceEndpoint}')
+            .then(response => {
+              if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+              }
+              return response.text();
+            })
+            .then(text => {
+              try {
+                const data = JSON.parse(text);
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'attendance',
+                  data: data
+                }));
+              } catch(e) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'error',
+                  message: 'Invalid JSON response. You may need to navigate to attendance page first.'
+                }));
+              }
+            })
+            .catch(error => {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'error',
+                message: error.toString()
+              }));
+            });
+        } catch(e) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'error',
+            message: e.toString()
+          }));
+        }
       })();
       true;
     `;
