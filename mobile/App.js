@@ -153,23 +153,10 @@ export default function App() {
     setShowLoginWebView(true);
   };
 
-  // Detect successful login in WebView
+  // Track WebView navigation (for debugging)
   const handleWebViewNavigationChange = (navState) => {
-    const url = navState.url;
-    console.log('WebView URL:', url);
-
-    // Check if redirected away from login page (successful login)
-    // Common patterns: redirected to dashboard, home, index, or student page
-    const loginPatterns = ['login', 'signin', 'auth', 'j_spring_security'];
-    const isOnLoginPage = loginPatterns.some(pattern => url.toLowerCase().includes(pattern));
-
-    // If we were on login and now we're not, login succeeded
-    if (!isOnLoginPage && !url.includes('error') && !url.includes('failed')) {
-      // Give it a moment then try to fetch attendance
-      setTimeout(() => {
-        fetchAttendanceAfterLogin();
-      }, 2000);
-    }
+    console.log('WebView URL:', navState.url);
+    // Don't auto-detect login - let user manually tap "Fetch Data"
   };
 
   // Fetch attendance after WebView login
