@@ -163,7 +163,7 @@ export default function App() {
       const data = await response.json();
 
       if (data.success) {
-        processAttendanceData(data.subjects);
+        processAttendanceData(data.subjects, data.student);
         Alert.alert('Success', `Fetched ${data.count} subjects!`);
       } else {
         Alert.alert('Error', data.error || 'Failed to fetch attendance');
@@ -179,15 +179,17 @@ export default function App() {
     }
   };
 
-  const processAttendanceData = (subjectsData) => {
+  const processAttendanceData = (subjectsData, apiStudentInfo) => {
     setSubjects(subjectsData);
     setLastFetched(new Date().toISOString());
     setIsLoggedIn(true);
 
-    // Create student info from first subject or default
+    // Use student info from API if available, otherwise create from URL
+    const institution = new URL(erpUrl).hostname.split('.')[1]?.toUpperCase() || 'University';
     const studentData = {
-      name: 'Student',
-      institution: new URL(erpUrl).hostname.split('.')[1]?.toUpperCase() || 'University',
+      name: apiStudentInfo?.name || 'Student',
+      usn: apiStudentInfo?.usn || '',
+      institution: institution,
     };
     setStudentInfo(studentData);
 
@@ -522,6 +524,9 @@ export default function App() {
         <View>
           <Text style={styles.headerTitle}>{studentInfo?.institution || 'UniTrack'}</Text>
           <Text style={styles.headerSubtitle}>{studentInfo?.name || 'Student'}</Text>
+          {studentInfo?.usn ? (
+            <Text style={styles.headerUsn}>{studentInfo.usn}</Text>
+          ) : null}
         </View>
         <TouchableOpacity onPress={() => setShowSettings(true)} style={styles.settingsButton}>
           <Text style={styles.settingsIcon}>⚙️</Text>
@@ -658,6 +663,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#bfdbfe',
     marginTop: 4,
+  },
+  headerUsn: {
+    fontSize: 13,
+    color: '#93c5fd',
+    marginTop: 2,
   },
   settingsButton: {
     padding: 8,

@@ -28,9 +28,11 @@ def fetch_attendance_from_erp(erp_url, username, password):
         dict with success status and data/error
     """
     captured_data = []
+    student_info = {}
 
     def capture_response(response):
         """Capture JSON responses that look like attendance data."""
+        nonlocal student_info
         try:
             if response.status == 200:
                 url = response.url.lower()
@@ -134,6 +136,65 @@ def fetch_attendance_from_erp(erp_url, username, password):
 
             print(f"After login, URL: {page.url}")
 
+            # Try to extract student info from the page
+            try:
+                # Common selectors for student name/USN
+                name_selectors = [
+                    '#studName', '.student-name', '#studentName',
+                    'span:has-text("Name")', '.profile-name'
+                ]
+                usn_selectors = [
+                    '#studUsn', '.student-usn', '#studentUsn', '#usn',
+                    'span:has-text("USN")', '.profile-usn'
+                ]
+
+                # Try to get name from page text
+                page_text = page.content()
+
+                # Look for name pattern in welcome message or header
+                for selector in name_selectors:
+                    try:
+                        elem = page.locator(selector)
+                        if elem.count() > 0:
+                            student_info['name'] = elem.first.text_content().strip()
+                            break
+                    except:
+                        continue
+
+                # Try to get USN
+                for selector in usn_selectors:
+                    try:
+                        elem = page.locator(selector)
+                        if elem.count() > 0:
+                            student_info['usn'] = elem.first.text_content().strip()
+                            break
+                    except:
+                        continue
+
+                # If no name found, try extracting from page content
+                if not student_info.get('name'):
+                    # Try JavaScript to get student info
+                    try:
+                        info = page.evaluate('''() => {
+                            // Look for student info in common places
+                            let name = document.querySelector('.studName, #studName, .student-name');
+                            let usn = document.querySelector('.studUsn, #studUsn, .student-usn');
+                            return {
+                                name: name ? name.textContent.trim() : null,
+                                usn: usn ? usn.textContent.trim() : null
+                            };
+                        }''')
+                        if info.get('name'):
+                            student_info['name'] = info['name']
+                        if info.get('usn'):
+                            student_info['usn'] = info['usn']
+                    except:
+                        pass
+
+                print(f"Student info: {student_info}")
+            except Exception as e:
+                print(f"Error getting student info: {e}")
+
             # Try to trigger attendance data
             # Click on attendance menu items
             attendance_triggers = [
@@ -174,7 +235,8 @@ def fetch_attendance_from_erp(erp_url, username, password):
                 return {
                     "success": True,
                     "subjects": processed,
-                    "count": len(processed)
+                    "count": len(processed),
+                    "student": student_info if student_info else None
                 }
             else:
                 return {"success": False, "error": "No attendance data found. Make sure you're enrolled and have attendance records."}
@@ -187,18 +249,39 @@ def fetch_attendance_from_erp(erp_url, username, password):
 def process_attendance(raw_data):
     """Process raw attendance data into standard format."""
     processed = []
+    seen_subjects = set()  # Track duplicates
 
     for item in raw_data:
         try:
             # Try different field names
+            subject_name = item.get('subject', item.get('subjectName', ''))
+            subject_code = item.get('subjectCode', item.get('code', ''))
+
+            # Skip if no valid subject name or code
+            if not subject_name or subject_name.lower() in ['unknown', 'null', 'none', '']:
+                if not subject_code:
+                    continue
+                subject_name = subject_code  # Use code as name if no name
+
+            # Skip duplicates
+            key = f"{subject_name}_{subject_code}"
+            if key in seen_subjects:
+                continue
+            seen_subjects.add(key)
+
             present = int(item.get('presentCount', item.get('present', 0)))
             absent = int(item.get('absentCount', item.get('absent', 0)))
             total = present + absent
+
+            # Skip if no attendance data
+            if total == 0:
+                continue
+
             percentage = (present / total * 100) if total > 0 else 0
 
             processed.append({
-                'subject': item.get('subject', item.get('subjectName', 'Unknown')),
-                'subject_code': item.get('subjectCode', item.get('code', '')),
+                'subject': subject_name,
+                'subject_code': subject_code,
                 'present': present,
                 'absent': absent,
                 'total': total,
