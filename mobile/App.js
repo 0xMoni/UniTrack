@@ -219,6 +219,7 @@ export default function App() {
     // Set a timeout in case fetch hangs
     setTimeout(() => {
       setLoading(false);
+      Alert.alert('Timeout', 'Fetch took too long. Try navigating to your attendance page first, then tap Fetch Data.');
     }, 15000);
 
     // Inject JavaScript to fetch attendance data using WebView's session
@@ -235,28 +236,35 @@ export default function App() {
             .then(text => {
               try {
                 const data = JSON.parse(text);
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'attendance',
-                  data: data
-                }));
+                if (window.ReactNativeWebView) {
+                  window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'attendance',
+                    data: data
+                  }));
+                } else {
+                  alert('Got ' + data.length + ' subjects! But cannot send to app.');
+                }
               } catch(e) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'error',
-                  message: 'Invalid JSON response. You may need to navigate to attendance page first.'
-                }));
+                alert('Response is not JSON: ' + text.substring(0, 100));
+                if (window.ReactNativeWebView) {
+                  window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'error',
+                    message: 'Invalid JSON response'
+                  }));
+                }
               }
             })
             .catch(error => {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'error',
-                message: error.toString()
-              }));
+              alert('Fetch error: ' + error.toString());
+              if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'error',
+                  message: error.toString()
+                }));
+              }
             });
         } catch(e) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'error',
-            message: e.toString()
-          }));
+          alert('Script error: ' + e.toString());
         }
       })();
       true;
