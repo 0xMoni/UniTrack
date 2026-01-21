@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -12,11 +12,13 @@ import {
   SafeAreaView,
   Image,
   ActivityIndicator,
-  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { WebView } from 'react-native-webview';
-import CookieManager from '@react-native-cookies/cookies';
+
+// Backend API URL - Update this after deploying to Render
+const API_URL = 'https://unitrack-api.onrender.com';
 
 // Splash Screen Component
 function SplashScreen() {
@@ -61,18 +63,16 @@ const splashStyles = StyleSheet.create({
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
-  const [isConnected, setIsConnected] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // WebView login modal
-  const [showLoginWebView, setShowLoginWebView] = useState(false);
-  const webViewRef = useRef(null);
-
-  // ERP Configuration
+  // Login credentials
   const [erpUrl, setErpUrl] = useState('');
-  const [attendanceEndpoint, setAttendanceEndpoint] = useState('/stu_getSubjectOnChangeWithSemId1.json');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   // Student & attendance data
   const [studentInfo, setStudentInfo] = useState(null);
@@ -96,15 +96,17 @@ export default function App() {
   const loadSavedData = async () => {
     try {
       const savedErpUrl = await AsyncStorage.getItem('erpUrl');
-      const savedEndpoint = await AsyncStorage.getItem('attendanceEndpoint');
+      const savedUsername = await AsyncStorage.getItem('username');
+      const savedPassword = await AsyncStorage.getItem('password');
       const savedSubjects = await AsyncStorage.getItem('subjects');
       const savedStudentInfo = await AsyncStorage.getItem('studentInfo');
       const savedThreshold = await AsyncStorage.getItem('defaultThreshold');
-      const savedConnected = await AsyncStorage.getItem('isConnected');
+      const savedLoggedIn = await AsyncStorage.getItem('isLoggedIn');
       const savedLastFetched = await AsyncStorage.getItem('lastFetched');
 
       if (savedErpUrl) setErpUrl(savedErpUrl);
-      if (savedEndpoint) setAttendanceEndpoint(savedEndpoint);
+      if (savedUsername) setUsername(savedUsername);
+      if (savedPassword) setPassword(savedPassword);
       if (savedThreshold) setDefaultThreshold(savedThreshold);
       if (savedLastFetched) setLastFetched(savedLastFetched);
 
@@ -114,8 +116,8 @@ export default function App() {
       if (savedStudentInfo) {
         setStudentInfo(JSON.parse(savedStudentInfo));
       }
-      if (savedConnected === 'true' && savedSubjects) {
-        setIsConnected(true);
+      if (savedLoggedIn === 'true' && savedSubjects) {
+        setIsLoggedIn(true);
       }
     } catch (e) {
       console.log('Error loading saved data:', e);
@@ -125,273 +127,86 @@ export default function App() {
   const saveData = async (subjectsData, studentData) => {
     try {
       await AsyncStorage.setItem('erpUrl', erpUrl);
-      await AsyncStorage.setItem('attendanceEndpoint', attendanceEndpoint);
+      await AsyncStorage.setItem('username', username);
+      await AsyncStorage.setItem('password', password);
       await AsyncStorage.setItem('subjects', JSON.stringify(subjectsData));
       await AsyncStorage.setItem('studentInfo', JSON.stringify(studentData));
       await AsyncStorage.setItem('defaultThreshold', defaultThreshold);
-      await AsyncStorage.setItem('isConnected', 'true');
+      await AsyncStorage.setItem('isLoggedIn', 'true');
       await AsyncStorage.setItem('lastFetched', new Date().toISOString());
     } catch (e) {
       console.log('Error saving data:', e);
     }
   };
 
-  // Open WebView for login
-  const openLoginWebView = () => {
-    if (!erpUrl) {
-      Alert.alert('Error', 'Please enter your ERP URL first');
+  const fetchAttendance = async () => {
+    if (!erpUrl || !username || !password) {
+      Alert.alert('Error', 'Please fill in all fields');
       return;
     }
 
-    // Ensure URL has protocol
-    let url = erpUrl.trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://' + url;
-      setErpUrl(url);
-    }
-
-    setShowLoginWebView(true);
-  };
-
-  // Track WebView navigation (for debugging)
-  const handleWebViewNavigationChange = (navState) => {
-    console.log('WebView URL:', navState.url);
-    // Don't auto-detect login - let user manually tap "Fetch Data"
-  };
-
-  // Fetch attendance after WebView login
-  const fetchAttendanceAfterLogin = async () => {
     setLoading(true);
 
     try {
-      // Get cookies from the WebView session
-      const cookies = await CookieManager.get(erpUrl);
-      console.log('Cookies:', cookies);
-
-      // Build cookie string for fetch
-      const cookieString = Object.entries(cookies)
-        .map(([name, cookie]) => `${name}=${cookie.value}`)
-        .join('; ');
-
-      // Try to fetch attendance data
-      const attendanceUrl = `${erpUrl}${attendanceEndpoint}`;
-      console.log('Fetching:', attendanceUrl);
-
-      const response = await fetch(attendanceUrl, {
-        method: 'GET',
+      const response = await fetch(`${API_URL}/api/fetch`, {
+        method: 'POST',
         headers: {
-          'Cookie': cookieString,
-          'Accept': 'application/json',
+          'Content-Type': 'application/json',
         },
-        credentials: 'include',
+        body: JSON.stringify({
+          erp_url: erpUrl,
+          username: username,
+          password: password,
+        }),
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      const data = await response.json();
 
-      const rawData = await response.json();
-
-      if (Array.isArray(rawData) && rawData.length > 0) {
-        processAttendanceData(rawData);
-        setShowLoginWebView(false);
-        Alert.alert('Success', 'Connected to ERP! Your attendance has been fetched.');
+      if (data.success) {
+        processAttendanceData(data.subjects);
+        Alert.alert('Success', `Fetched ${data.count} subjects!`);
       } else {
-        // Maybe we need to navigate to attendance page first
-        Alert.alert(
-          'Almost there!',
-          'Please navigate to your attendance page in the browser, then tap "Fetch Data" button.',
-          [{ text: 'OK' }]
-        );
+        Alert.alert('Error', data.error || 'Failed to fetch attendance');
       }
     } catch (error) {
       console.log('Fetch error:', error);
-      // Don't show error - user might still be navigating
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Manual fetch button in WebView - uses WebView to fetch (keeps session)
-  const manualFetchFromWebView = () => {
-    setLoading(true);
-
-    // Set a timeout in case fetch hangs
-    setTimeout(() => {
-      setLoading(false);
-      Alert.alert('Timeout', 'Fetch took too long. Try navigating to your attendance page first, then tap Fetch Data.');
-    }, 15000);
-
-    // Inject JavaScript to fetch attendance data using WebView's session
-    const fetchScript = `
-      (function() {
-        alert('Starting fetch...');
-        try {
-          fetch('${erpUrl}${attendanceEndpoint}')
-            .then(response => {
-              if (!response.ok) {
-                throw new Error('HTTP ' + response.status);
-              }
-              return response.text();
-            })
-            .then(text => {
-              try {
-                const data = JSON.parse(text);
-                if (window.ReactNativeWebView) {
-                  window.ReactNativeWebView.postMessage(JSON.stringify({
-                    type: 'attendance',
-                    data: data
-                  }));
-                } else {
-                  alert('Got ' + data.length + ' subjects! But cannot send to app.');
-                }
-              } catch(e) {
-                alert('Response is not JSON: ' + text.substring(0, 100));
-                if (window.ReactNativeWebView) {
-                  window.ReactNativeWebView.postMessage(JSON.stringify({
-                    type: 'error',
-                    message: 'Invalid JSON response'
-                  }));
-                }
-              }
-            })
-            .catch(error => {
-              alert('Fetch error: ' + error.toString());
-              if (window.ReactNativeWebView) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'error',
-                  message: error.toString()
-                }));
-              }
-            });
-        } catch(e) {
-          alert('Script error: ' + e.toString());
-        }
-      })();
-      true;
-    `;
-
-    if (webViewRef.current) {
-      webViewRef.current.injectJavaScript(fetchScript);
-    }
-  };
-
-  // Handle messages from WebView
-  const handleWebViewMessage = (event) => {
-    try {
-      const message = JSON.parse(event.nativeEvent.data);
-
-      if (message.type === 'attendance') {
-        if (Array.isArray(message.data) && message.data.length > 0) {
-          processAttendanceData(message.data);
-          setShowLoginWebView(false);
-          setLoading(false);
-          Alert.alert('Success', `Fetched ${message.data.length} subjects!`);
-        } else {
-          setLoading(false);
-          Alert.alert('No Data', 'Could not find attendance data. Try navigating to your attendance page first, then tap Fetch Data.');
-        }
-      } else if (message.type === 'error') {
-        setLoading(false);
-        Alert.alert('Error', `Failed to fetch: ${message.message}`);
-      }
-    } catch (e) {
-      // Not a JSON message, ignore
-      console.log('WebView message:', event.nativeEvent.data);
-    }
-  };
-
-  const processAttendanceData = (rawData) => {
-    // Process attendance data
-    const processedSubjects = rawData.map(item => {
-      const present = parseInt(item.presentCount) || 0;
-      const absent = parseInt(item.absentCount) || 0;
-      const total = present + absent;
-      const percentage = total > 0 ? (present / total * 100) : 0;
-
-      return {
-        subject: item.subject || item.subjectName || 'Unknown',
-        subject_code: item.subjectCode || '',
-        present,
-        absent,
-        total,
-        percentage: Math.round(percentage * 100) / 100,
-        faculty: (item.facultName || item.facultyName || '').trim(),
-      };
-    });
-
-    // Extract student info
-    const studentData = {
-      name: rawData[0]?.studentName || rawData[0]?.name || 'Student',
-      rollNumber: rawData[0]?.rollNumber || rawData[0]?.regNo || '',
-      branch: rawData[0]?.branchName || rawData[0]?.branch || '',
-      section: rawData[0]?.sectionName || rawData[0]?.section || '',
-      institution: rawData[0]?.institutionName || 'Your Institution',
-    };
-
-    setSubjects(processedSubjects);
-    setStudentInfo(studentData);
-    setLastFetched(new Date().toISOString());
-    setIsConnected(true);
-
-    // Save for offline access
-    saveData(processedSubjects, studentData);
-  };
-
-  // Refresh attendance (uses saved session)
-  const refreshAttendance = async () => {
-    setRefreshing(true);
-
-    try {
-      const cookies = await CookieManager.get(erpUrl);
-      const cookieString = Object.entries(cookies)
-        .map(([name, cookie]) => `${name}=${cookie.value}`)
-        .join('; ');
-
-      const attendanceUrl = `${erpUrl}${attendanceEndpoint}`;
-
-      const response = await fetch(attendanceUrl, {
-        method: 'GET',
-        headers: {
-          'Cookie': cookieString,
-          'Accept': 'application/json',
-        },
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error('Session expired');
-      }
-
-      const rawData = await response.json();
-
-      if (Array.isArray(rawData) && rawData.length > 0) {
-        processAttendanceData(rawData);
-      } else {
-        throw new Error('No data received');
-      }
-    } catch (error) {
-      console.log('Refresh error:', error);
       Alert.alert(
-        'Session Expired',
-        'Your login session has expired. Please login again.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Login', onPress: () => setShowLoginWebView(true) },
-        ]
+        'Connection Error',
+        'Could not connect to server. Please check your internet connection and try again.'
       );
     } finally {
-      setRefreshing(false);
+      setLoading(false);
     }
+  };
+
+  const processAttendanceData = (subjectsData) => {
+    setSubjects(subjectsData);
+    setLastFetched(new Date().toISOString());
+    setIsLoggedIn(true);
+
+    // Create student info from first subject or default
+    const studentData = {
+      name: 'Student',
+      institution: new URL(erpUrl).hostname.split('.')[1]?.toUpperCase() || 'University',
+    };
+    setStudentInfo(studentData);
+
+    // Save for offline access
+    saveData(subjectsData, studentData);
+  };
+
+  const refreshAttendance = async () => {
+    setRefreshing(true);
+    await fetchAttendance();
+    setRefreshing(false);
   };
 
   const logout = async () => {
     await AsyncStorage.clear();
-    await CookieManager.clearAll();
-    setIsConnected(false);
+    setIsLoggedIn(false);
     setSubjects([]);
     setStudentInfo(null);
-    setErpUrl('');
+    setPassword('');
     setShowSettings(false);
   };
 
@@ -471,56 +286,6 @@ export default function App() {
     return <SplashScreen />;
   }
 
-  // WebView Login Modal
-  const LoginWebViewModal = () => (
-    <Modal
-      visible={showLoginWebView}
-      animationType="slide"
-      onRequestClose={() => setShowLoginWebView(false)}
-    >
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#2563eb' }}>
-        <View style={styles.webViewHeader}>
-          <TouchableOpacity onPress={() => setShowLoginWebView(false)}>
-            <Text style={styles.webViewClose}>Close</Text>
-          </TouchableOpacity>
-          <Text style={styles.webViewTitle}>Login to ERP</Text>
-          <TouchableOpacity onPress={manualFetchFromWebView} disabled={loading}>
-            {loading ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.webViewFetch}>Fetch Data</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        <WebView
-          ref={webViewRef}
-          source={{ uri: erpUrl }}
-          style={{ flex: 1 }}
-          onNavigationStateChange={handleWebViewNavigationChange}
-          onMessage={handleWebViewMessage}
-          javaScriptEnabled={true}
-          domStorageEnabled={true}
-          sharedCookiesEnabled={true}
-          thirdPartyCookiesEnabled={true}
-          startInLoadingState={true}
-          renderLoading={() => (
-            <View style={styles.webViewLoading}>
-              <ActivityIndicator size="large" color="#2563eb" />
-              <Text style={{ marginTop: 10, color: '#6b7280' }}>Loading ERP...</Text>
-            </View>
-          )}
-        />
-
-        <View style={styles.webViewFooter}>
-          <Text style={styles.webViewHint}>
-            Login normally, then tap "Fetch Data" to get your attendance
-          </Text>
-        </View>
-      </SafeAreaView>
-    </Modal>
-  );
-
   // Settings Screen
   if (showSettings) {
     return (
@@ -529,39 +294,6 @@ export default function App() {
         <ScrollView style={styles.settingsScroll}>
           <View style={styles.settingsContainer}>
             <Text style={styles.settingsTitle}>Settings</Text>
-
-            {/* ERP Settings */}
-            <Text style={styles.sectionHeader}>ERP Connection</Text>
-            <Text style={styles.settingsLabel}>ERP URL:</Text>
-            <TextInput
-              style={styles.input}
-              value={erpUrl}
-              onChangeText={setErpUrl}
-              placeholder="https://erp.university.edu"
-              autoCapitalize="none"
-            />
-
-            <Text style={styles.settingsLabel}>Attendance API Endpoint:</Text>
-            <TextInput
-              style={styles.input}
-              value={attendanceEndpoint}
-              onChangeText={setAttendanceEndpoint}
-              placeholder="/attendance.json"
-              autoCapitalize="none"
-            />
-            <Text style={styles.settingsHint}>
-              The JSON endpoint that returns attendance data
-            </Text>
-
-            <TouchableOpacity
-              style={styles.reconnectButton}
-              onPress={() => {
-                setShowSettings(false);
-                setShowLoginWebView(true);
-              }}
-            >
-              <Text style={styles.reconnectButtonText}>Re-login to ERP</Text>
-            </TouchableOpacity>
 
             {/* Threshold Settings */}
             <Text style={styles.sectionHeader}>Attendance Thresholds</Text>
@@ -652,13 +384,13 @@ export default function App() {
             <TouchableOpacity
               style={styles.logoutButton}
               onPress={() => {
-                Alert.alert('Disconnect', 'This will clear all saved data. Continue?', [
+                Alert.alert('Logout', 'This will clear all saved data. Continue?', [
                   { text: 'Cancel', style: 'cancel' },
-                  { text: 'Disconnect', style: 'destructive', onPress: logout },
+                  { text: 'Logout', style: 'destructive', onPress: logout },
                 ]);
               }}
             >
-              <Text style={styles.logoutButtonText}>Disconnect & Clear Data</Text>
+              <Text style={styles.logoutButtonText}>Logout & Clear Data</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -666,82 +398,88 @@ export default function App() {
     );
   }
 
-  // Setup Screen (First Time)
-  if (!isConnected) {
+  // Login Screen
+  if (!isLoggedIn) {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
-        <LoginWebViewModal />
-
-        <ScrollView contentContainerStyle={styles.setupScrollContent}>
-          <View style={styles.setupContainer}>
-            <Image
-              source={require('./assets/icon.png')}
-              style={styles.setupLogo}
-              resizeMode="contain"
-            />
-            <Text style={styles.setupTitle}>UniTrack</Text>
-            <Text style={styles.setupSubtitle}>University Attendance Tracker</Text>
-
-            <View style={styles.setupForm}>
-              <Text style={styles.setupLabel}>Enter your ERP URL</Text>
-              <TextInput
-                style={styles.setupInput}
-                value={erpUrl}
-                onChangeText={setErpUrl}
-                placeholder="https://erp.university.edu"
-                placeholderTextColor="#999"
-                autoCapitalize="none"
-                keyboardType="url"
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <ScrollView
+            contentContainerStyle={styles.loginScrollContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.loginContainer}>
+              <Image
+                source={require('./assets/icon.png')}
+                style={styles.loginLogo}
+                resizeMode="contain"
               />
+              <Text style={styles.loginTitle}>UniTrack</Text>
+              <Text style={styles.loginSubtitle}>University Attendance Tracker</Text>
 
-              <Text style={styles.setupHint}>
-                This is the website where you check your attendance
-              </Text>
+              <View style={styles.loginForm}>
+                <Text style={styles.loginLabel}>ERP URL</Text>
+                <TextInput
+                  style={styles.loginInput}
+                  value={erpUrl}
+                  onChangeText={setErpUrl}
+                  placeholder="https://erp.university.edu"
+                  placeholderTextColor="#9ca3af"
+                  autoCapitalize="none"
+                  keyboardType="url"
+                />
 
-              <TouchableOpacity
-                style={[styles.connectButton, !erpUrl && styles.connectButtonDisabled]}
-                onPress={openLoginWebView}
-                disabled={!erpUrl}
-              >
-                <Text style={styles.connectButtonText}>Connect to ERP</Text>
-              </TouchableOpacity>
+                <Text style={styles.loginLabel}>Username / Email</Text>
+                <TextInput
+                  style={styles.loginInput}
+                  value={username}
+                  onChangeText={setUsername}
+                  placeholder="student@university.edu"
+                  placeholderTextColor="#9ca3af"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
 
-              <Text style={styles.setupNote}>
-                You'll login once through your ERP website.{'\n'}
-                After that, just pull to refresh - no re-login needed!
-              </Text>
+                <Text style={styles.loginLabel}>Password</Text>
+                <View style={styles.passwordContainer}>
+                  <TextInput
+                    style={styles.passwordInput}
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="••••••••"
+                    placeholderTextColor="#9ca3af"
+                    secureTextEntry={!showPassword}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeButton}
+                    onPress={() => setShowPassword(!showPassword)}
+                  >
+                    <Text style={styles.eyeIcon}>{showPassword ? '👁️' : '👁️‍🗨️'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+                  onPress={fetchAttendance}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.loginButtonText}>Login & Fetch Attendance</Text>
+                  )}
+                </TouchableOpacity>
+
+                <Text style={styles.loginHint}>
+                  Your credentials are sent securely to our server which fetches your attendance from the ERP.
+                </Text>
+              </View>
             </View>
-
-            {/* Advanced Settings */}
-            <TouchableOpacity
-              style={styles.advancedToggle}
-              onPress={() => {
-                Alert.alert(
-                  'API Endpoint',
-                  'Enter the JSON endpoint path that returns attendance data (e.g., /api/attendance.json)',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Set',
-                      onPress: () => {
-                        Alert.prompt?.(
-                          'API Endpoint',
-                          'Enter endpoint path:',
-                          setAttendanceEndpoint,
-                          'plain-text',
-                          attendanceEndpoint
-                        );
-                      }
-                    }
-                  ]
-                );
-              }}
-            >
-              <Text style={styles.advancedToggleText}>Advanced Settings</Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
@@ -778,16 +516,12 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
-      <LoginWebViewModal />
 
       {/* Header */}
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>{studentInfo?.institution || 'UniTrack'}</Text>
-          <Text style={styles.headerSubtitle}>{studentInfo?.name} {studentInfo?.rollNumber ? `(${studentInfo.rollNumber})` : ''}</Text>
-          {studentInfo?.branch && (
-            <Text style={styles.headerInfo}>{studentInfo.branch} {studentInfo?.section ? `| Section ${studentInfo.section}` : ''}</Text>
-          )}
+          <Text style={styles.headerSubtitle}>{studentInfo?.name || 'Student'}</Text>
         </View>
         <TouchableOpacity onPress={() => setShowSettings(true)} style={styles.settingsButton}>
           <Text style={styles.settingsIcon}>⚙️</Text>
@@ -924,11 +658,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#bfdbfe',
     marginTop: 4,
-  },
-  headerInfo: {
-    fontSize: 13,
-    color: '#93c5fd',
-    marginTop: 2,
   },
   settingsButton: {
     padding: 8,
@@ -1222,18 +951,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  reconnectButton: {
-    backgroundColor: '#dbeafe',
-    padding: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  reconnectButtonText: {
-    color: '#2563eb',
-    fontSize: 15,
-    fontWeight: '600',
-  },
   logoutButton: {
     backgroundColor: '#fee2e2',
     padding: 16,
@@ -1246,138 +963,90 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  // Setup Screen styles
-  setupScrollContent: {
+  // Login styles
+  loginScrollContent: {
     flexGrow: 1,
   },
-  setupContainer: {
+  loginContainer: {
     flex: 1,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
-    paddingTop: 60,
   },
-  setupLogo: {
-    width: 100,
-    height: 100,
+  loginLogo: {
+    width: 80,
+    height: 80,
     marginBottom: 16,
   },
-  setupTitle: {
-    fontSize: 32,
+  loginTitle: {
+    fontSize: 28,
     fontWeight: '800',
     color: '#1f2937',
-    marginBottom: 4,
   },
-  setupSubtitle: {
+  loginSubtitle: {
     fontSize: 14,
     color: '#6b7280',
     marginBottom: 30,
   },
-  setupForm: {
+  loginForm: {
     width: '100%',
-    backgroundColor: '#f9fafb',
-    borderRadius: 16,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
   },
-  setupLabel: {
+  loginLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: '#374151',
-    marginBottom: 8,
+    marginBottom: 6,
   },
-  setupInput: {
-    backgroundColor: '#fff',
+  loginInput: {
+    backgroundColor: '#f9fafb',
     borderWidth: 1,
     borderColor: '#d1d5db',
-    borderRadius: 8,
+    borderRadius: 10,
     padding: 14,
     fontSize: 16,
-    marginBottom: 8,
+    marginBottom: 16,
     color: '#1f2937',
   },
-  setupHint: {
-    fontSize: 12,
-    color: '#9ca3af',
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 10,
     marginBottom: 20,
   },
-  connectButton: {
+  passwordInput: {
+    flex: 1,
+    padding: 14,
+    fontSize: 16,
+    color: '#1f2937',
+  },
+  eyeButton: {
+    padding: 14,
+  },
+  eyeIcon: {
+    fontSize: 18,
+  },
+  loginButton: {
     backgroundColor: '#2563eb',
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
   },
-  connectButtonDisabled: {
+  loginButtonDisabled: {
     backgroundColor: '#93c5fd',
   },
-  connectButtonText: {
+  loginButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },
-  setupNote: {
+  loginHint: {
     fontSize: 12,
-    color: '#6b7280',
+    color: '#9ca3af',
     textAlign: 'center',
     marginTop: 16,
-    lineHeight: 18,
-  },
-  advancedToggle: {
-    marginTop: 24,
-  },
-  advancedToggleText: {
-    color: '#6b7280',
-    fontSize: 14,
-  },
-  // WebView Modal styles
-  webViewHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    paddingTop: 50,
-    backgroundColor: '#2563eb',
-  },
-  webViewClose: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  webViewTitle: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '600',
-  },
-  webViewFetch: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  webViewLoading: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  webViewFooter: {
-    padding: 12,
-    backgroundColor: '#f3f4f6',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  webViewHint: {
-    textAlign: 'center',
-    color: '#6b7280',
-    fontSize: 13,
   },
 });
