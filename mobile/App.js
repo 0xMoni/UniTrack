@@ -225,6 +225,7 @@ export default function App() {
     // Inject JavaScript to fetch attendance data using WebView's session
     const fetchScript = `
       (function() {
+        alert('Starting fetch...');
         try {
           fetch('${erpUrl}${attendanceEndpoint}')
             .then(response => {
