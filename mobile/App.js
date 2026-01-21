@@ -86,6 +86,9 @@ export default function App() {
   const [newKeyword, setNewKeyword] = useState('');
   const [newThreshold, setNewThreshold] = useState('');
 
+  // Filter state
+  const [activeFilter, setActiveFilter] = useState(null);
+
   // Load saved data on start
   useEffect(() => {
     loadSavedData();
@@ -569,25 +572,36 @@ export default function App() {
           </View>
 
           <View style={styles.summaryRow}>
-            <View style={[styles.summaryCard, styles.summarySmallCard]}>
+            <TouchableOpacity
+              style={[styles.summaryCard, styles.summarySmallCard, activeFilter === 'SAFE' && styles.filterActive]}
+              onPress={() => setActiveFilter(activeFilter === 'SAFE' ? null : 'SAFE')}
+            >
               <Text style={[styles.summaryValue, { color: '#22c55e' }]}>{summary.safe_count}</Text>
               <Text style={styles.summaryLabel}>Safe</Text>
-            </View>
-            <View style={[styles.summaryCard, styles.summarySmallCard]}>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.summaryCard, styles.summarySmallCard, activeFilter === 'CRITICAL' && styles.filterActive]}
+              onPress={() => setActiveFilter(activeFilter === 'CRITICAL' ? null : 'CRITICAL')}
+            >
               <Text style={[styles.summaryValue, { color: '#eab308' }]}>{summary.critical_count}</Text>
               <Text style={styles.summaryLabel}>Critical</Text>
-            </View>
-            <View style={[styles.summaryCard, styles.summarySmallCard]}>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.summaryCard, styles.summarySmallCard, activeFilter === 'LOW' && styles.filterActive]}
+              onPress={() => setActiveFilter(activeFilter === 'LOW' ? null : 'LOW')}
+            >
               <Text style={[styles.summaryValue, { color: '#ef4444' }]}>{summary.low_count}</Text>
               <Text style={styles.summaryLabel}>Low</Text>
-            </View>
+            </TouchableOpacity>
           </View>
         </View>
 
         {/* Subject List */}
-        <Text style={styles.sectionTitle}>Subjects ({processedSubjects.length})</Text>
+        <Text style={styles.sectionTitle}>
+          {activeFilter ? `${activeFilter} Subjects` : 'All Subjects'} ({(activeFilter ? processedSubjects.filter(s => s.status === activeFilter) : processedSubjects).length})
+        </Text>
 
-        {processedSubjects.map((subject, idx) => {
+        {(activeFilter ? processedSubjects.filter(s => s.status === activeFilter) : processedSubjects).map((subject, idx) => {
           const statusStyle = getStatusStyle(subject.status);
           const hasCustomThreshold = subject.threshold !== parseFloat(defaultThreshold);
 
@@ -738,6 +752,10 @@ const styles = StyleSheet.create({
     padding: 16,
     marginHorizontal: 4,
     alignItems: 'center',
+  },
+  filterActive: {
+    borderWidth: 2,
+    borderColor: '#2563eb',
   },
   summaryValue: {
     fontSize: 32,
