@@ -272,11 +272,6 @@ def process_attendance(raw_data):
             present = int(item.get('presentCount', item.get('present', 0)))
             absent = int(item.get('absentCount', item.get('absent', 0)))
             total = present + absent
-
-            # Skip if no attendance data
-            if total == 0:
-                continue
-
             percentage = (present / total * 100) if total > 0 else 0
 
             processed.append({
