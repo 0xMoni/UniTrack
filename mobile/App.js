@@ -184,10 +184,24 @@ export default function App() {
     setLastFetched(new Date().toISOString());
     setIsLoggedIn(true);
 
-    // Use student info from API if available, otherwise create from URL
+    // Use student info from API if available, otherwise use username
     const institution = new URL(erpUrl).hostname.split('.')[1]?.toUpperCase() || 'University';
+
+    // Try to get name: from API, or extract from username
+    let studentName = apiStudentInfo?.name;
+    if (!studentName || studentName === 'Student') {
+      // Try to extract name from username (might be email like john.doe@email.com)
+      const namePart = username.split('@')[0]; // Get part before @
+      // Convert john.doe or john_doe to John Doe
+      studentName = namePart
+        .replace(/[._]/g, ' ')
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+    }
+
     const studentData = {
-      name: apiStudentInfo?.name || 'Student',
+      name: studentName,
       usn: apiStudentInfo?.usn || '',
       institution: institution,
     };
