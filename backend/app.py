@@ -138,60 +138,74 @@ def fetch_attendance_from_erp(erp_url, username, password):
 
             # Try to extract student info from the page
             try:
-                # Common selectors for student name/USN
-                name_selectors = [
-                    '#studName', '.student-name', '#studentName',
-                    'span:has-text("Name")', '.profile-name'
-                ]
-                usn_selectors = [
-                    '#studUsn', '.student-usn', '#studentUsn', '#usn',
-                    'span:has-text("USN")', '.profile-usn'
-                ]
+                # Use JavaScript to search the entire page for student info
+                info = page.evaluate('''() => {
+                    let result = { name: null, usn: null };
 
-                # Try to get name from page text
-                page_text = page.content()
+                    // Get all text content
+                    let bodyText = document.body.innerText || document.body.textContent;
 
-                # Look for name pattern in welcome message or header
-                for selector in name_selectors:
-                    try:
-                        elem = page.locator(selector)
-                        if elem.count() > 0:
-                            student_info['name'] = elem.first.text_content().strip()
-                            break
-                    except:
-                        continue
+                    // Look for USN pattern (e.g., 1CR21CS001, 4CB22AI001)
+                    let usnMatch = bodyText.match(/[0-9][A-Z]{2}[0-9]{2}[A-Z]{2,3}[0-9]{3}/i);
+                    if (usnMatch) {
+                        result.usn = usnMatch[0].toUpperCase();
+                    }
 
-                # Try to get USN
-                for selector in usn_selectors:
-                    try:
-                        elem = page.locator(selector)
-                        if elem.count() > 0:
-                            student_info['usn'] = elem.first.text_content().strip()
-                            break
-                    except:
-                        continue
+                    // Try common selectors for name
+                    let nameSelectors = [
+                        '#studName', '.studName', '#studentName', '.student-name',
+                        '.user-name', '.profile-name', '#userName', '.userName',
+                        '[class*="stud"][class*="name"]', '[id*="stud"][id*="name"]',
+                        '.navbar-text', '.welcome-text', '.user-info'
+                    ];
 
-                # If no name found, try extracting from page content
-                if not student_info.get('name'):
-                    # Try JavaScript to get student info
-                    try:
-                        info = page.evaluate('''() => {
-                            // Look for student info in common places
-                            let name = document.querySelector('.studName, #studName, .student-name');
-                            let usn = document.querySelector('.studUsn, #studUsn, .student-usn');
-                            return {
-                                name: name ? name.textContent.trim() : null,
-                                usn: usn ? usn.textContent.trim() : null
-                            };
-                        }''')
-                        if info.get('name'):
-                            student_info['name'] = info['name']
-                        if info.get('usn'):
-                            student_info['usn'] = info['usn']
-                    except:
-                        pass
+                    for (let sel of nameSelectors) {
+                        try {
+                            let el = document.querySelector(sel);
+                            if (el && el.textContent.trim().length > 2) {
+                                let text = el.textContent.trim();
+                                // Filter out common non-name text
+                                if (!text.toLowerCase().includes('welcome') &&
+                                    !text.toLowerCase().includes('logout') &&
+                                    !text.toLowerCase().includes('login')) {
+                                    result.name = text;
+                                    break;
+                                }
+                            }
+                        } catch(e) {}
+                    }
 
-                print(f"Student info: {student_info}")
+                    // Look for "Welcome, Name" pattern
+                    if (!result.name) {
+                        let welcomeMatch = bodyText.match(/welcome[,\\s]+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)/i);
+                        if (welcomeMatch) {
+                            result.name = welcomeMatch[1];
+                        }
+                    }
+
+                    // Look for name near USN
+                    if (!result.name && result.usn) {
+                        let usnIndex = bodyText.indexOf(result.usn);
+                        if (usnIndex > 0) {
+                            // Check text before and after USN
+                            let nearby = bodyText.substring(Math.max(0, usnIndex - 100), usnIndex + 100);
+                            // Look for capitalized words that could be names
+                            let nameMatch = nearby.match(/([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)+)/);
+                            if (nameMatch) {
+                                result.name = nameMatch[1];
+                            }
+                        }
+                    }
+
+                    return result;
+                }''')
+
+                if info.get('name'):
+                    student_info['name'] = info['name']
+                if info.get('usn'):
+                    student_info['usn'] = info['usn']
+
+                print(f"Student info from page: {student_info}")
             except Exception as e:
                 print(f"Error getting student info: {e}")
 
@@ -232,6 +246,13 @@ def fetch_attendance_from_erp(erp_url, username, password):
             if captured_data:
                 # Process data
                 processed = process_attendance(captured_data)
+
+                # Try to get student info from the data if not found on page
+                if not student_info.get('name') and not student_info.get('usn'):
+                    data_student = extract_student_from_data(captured_data)
+                    if data_student:
+                        student_info.update({k: v for k, v in data_student.items() if v})
+
                 return {
                     "success": True,
                     "subjects": processed,
@@ -244,6 +265,19 @@ def fetch_attendance_from_erp(erp_url, username, password):
         except Exception as e:
             browser.close()
             return {"success": False, "error": str(e)}
+
+
+def extract_student_from_data(raw_data):
+    """Try to extract student info from attendance records."""
+    for item in raw_data:
+        if isinstance(item, dict):
+            # Check for student name fields
+            name = item.get('studentName') or item.get('studName') or item.get('name') or item.get('student')
+            usn = item.get('usn') or item.get('studentUsn') or item.get('studUsn') or item.get('regNo') or item.get('rollNo')
+
+            if name or usn:
+                return {'name': name, 'usn': usn}
+    return None
 
 
 def process_attendance(raw_data):
