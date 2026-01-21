@@ -142,6 +142,31 @@ def fetch_attendance_from_erp(erp_url, username, password):
                 info = page.evaluate('''() => {
                     let result = { name: null, usn: null };
 
+                    // Words to exclude (menu items, common UI text)
+                    let excludeWords = [
+                        'schedule', 'academic', 'function', 'facility', 'facilities',
+                        'communication', 'welcome', 'logout', 'login', 'home', 'dashboard',
+                        'menu', 'student', 'attendance', 'report', 'profile', 'setting',
+                        'notification', 'message', 'calendar', 'exam', 'result', 'fee',
+                        'library', 'hostel', 'transport', 'placement', 'admin', 'help',
+                        'contact', 'about', 'feedback', 'support', 'service'
+                    ];
+
+                    function isValidName(text) {
+                        if (!text || text.length < 3 || text.length > 50) return false;
+                        let lower = text.toLowerCase();
+                        // Check if it contains any exclude words
+                        for (let word of excludeWords) {
+                            if (lower.includes(word)) return false;
+                        }
+                        // Name should only contain letters and spaces
+                        if (!/^[A-Za-z\\s]+$/.test(text)) return false;
+                        // Should have at least 2 parts or be a single reasonable name
+                        let parts = text.trim().split(/\\s+/);
+                        if (parts.length === 1 && parts[0].length < 4) return false;
+                        return true;
+                    }
+
                     // Get all text content
                     let bodyText = document.body.innerText || document.body.textContent;
 
@@ -151,48 +176,28 @@ def fetch_attendance_from_erp(erp_url, username, password):
                         result.usn = usnMatch[0].toUpperCase();
                     }
 
-                    // Try common selectors for name
-                    let nameSelectors = [
-                        '#studName', '.studName', '#studentName', '.student-name',
-                        '.user-name', '.profile-name', '#userName', '.userName',
-                        '[class*="stud"][class*="name"]', '[id*="stud"][id*="name"]',
-                        '.navbar-text', '.welcome-text', '.user-info'
-                    ];
-
-                    for (let sel of nameSelectors) {
-                        try {
-                            let el = document.querySelector(sel);
-                            if (el && el.textContent.trim().length > 2) {
-                                let text = el.textContent.trim();
-                                // Filter out common non-name text
-                                if (!text.toLowerCase().includes('welcome') &&
-                                    !text.toLowerCase().includes('logout') &&
-                                    !text.toLowerCase().includes('login')) {
-                                    result.name = text;
-                                    break;
-                                }
-                            }
-                        } catch(e) {}
+                    // Look for "Welcome, Name" or "Hi, Name" pattern first
+                    let welcomeMatch = bodyText.match(/(?:welcome|hi|hello)[,:\\s]+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)/i);
+                    if (welcomeMatch && isValidName(welcomeMatch[1])) {
+                        result.name = welcomeMatch[1];
                     }
 
-                    // Look for "Welcome, Name" pattern
-                    if (!result.name) {
-                        let welcomeMatch = bodyText.match(/welcome[,\\s]+([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*)/i);
-                        if (welcomeMatch) {
-                            result.name = welcomeMatch[1];
-                        }
-                    }
-
-                    // Look for name near USN
+                    // Look for name near USN if found
                     if (!result.name && result.usn) {
                         let usnIndex = bodyText.indexOf(result.usn);
                         if (usnIndex > 0) {
-                            // Check text before and after USN
-                            let nearby = bodyText.substring(Math.max(0, usnIndex - 100), usnIndex + 100);
-                            // Look for capitalized words that could be names
-                            let nameMatch = nearby.match(/([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)+)/);
-                            if (nameMatch) {
-                                result.name = nameMatch[1];
+                            // Check text around USN (before and after)
+                            let before = bodyText.substring(Math.max(0, usnIndex - 80), usnIndex);
+                            let after = bodyText.substring(usnIndex + result.usn.length, usnIndex + 80);
+
+                            // Look for name pattern - multiple capitalized words
+                            let patterns = [before, after];
+                            for (let text of patterns) {
+                                let nameMatch = text.match(/([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)+)/);
+                                if (nameMatch && isValidName(nameMatch[1])) {
+                                    result.name = nameMatch[1];
+                                    break;
+                                }
                             }
                         }
                     }
