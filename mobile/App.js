@@ -18,7 +18,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Backend API URL - Update this after deploying to Render
-const API_URL = 'https://unitrack-api.onrender.com';
+const API_URL = 'https://unitrack-api-vss4.onrender.com';
 
 // Splash Screen Component
 function SplashScreen() {
