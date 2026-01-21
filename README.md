@@ -1,95 +1,103 @@
 # UniTrack
 
-**University Attendance Tracker** - Track your college attendance from any ERP system.
+University Attendance Tracker - A mobile app that helps students track their attendance from any university ERP system.
 
 ## Features
 
-- **No Backend Required** - Connects directly to your ERP
-- **One-Time Login** - Login once, refresh anytime
-- **Universal Compatibility** - Works with most college ERP systems
-- **Offline Access** - View saved attendance without internet
-- **Configurable Thresholds** - Set different requirements for different subjects
-- **Smart Analysis** - Shows classes you can miss or need to attend
-
-## How It Works
-
-1. Enter your ERP URL
-2. Login once through the ERP website (in-app browser)
-3. Tap "Fetch Data" to get your attendance
-4. Done! Pull to refresh anytime - no re-login needed
-
-Session is saved until it expires. When it does, just login again.
-
-## Quick Start
-
-### Mobile App
-
-```bash
-# Clone the repo
-git clone https://github.com/0xMoni/UniTrack.git
-cd unitrack/mobile
-
-# Install dependencies
-npm install
-
-# Start development server
-npm start
-```
-
-Scan QR code with **Expo Go** app on your phone.
-
-### Building APK
-
-```bash
-cd mobile
-npm install -g eas-cli
-eas login
-eas build -p android --profile preview
-```
-
-## Custom Thresholds
-
-Set different attendance requirements in the app settings:
-
-- **Default Minimum**: 65%, 70%, 75%, or 80%
-- **Safe Buffer**: +5%, +10%, or +15%
-- **Custom Rules**: Set specific thresholds for subjects containing keywords (e.g., "Lab" → 85%)
+- **Universal ERP Support**: Works with any university ERP system
+- **Real-time Attendance Tracking**: Fetch your attendance data instantly
+- **Smart Categorization**: Subjects are categorized as Safe, Critical, or Low based on attendance percentage
+- **Filter by Status**: Tap on Safe/Critical/Low cards to filter subjects
+- **Customizable Thresholds**: Set default and subject-specific attendance thresholds
+- **Offline Access**: View your attendance data even without internet
+- **Clean UI**: Modern, intuitive interface with dark status indicators
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Mobile | React Native, Expo |
-| Storage | AsyncStorage |
-| Auth | WebView + CookieManager |
+### Mobile App
+- React Native / Expo
+- AsyncStorage for local data persistence
+- EAS Build for APK generation
 
-## Requirements
-
-- Node.js 18+
-- Expo Go app (for testing)
-- Android/iOS device
-
-## Supported ERPs
-
-Works with any ERP system that has:
-- Web-based login form
-- JSON API endpoint for attendance data
+### Backend
+- Python Flask API
+- Playwright for browser automation
+- Docker for containerization
+- Hosted on Render.com
 
 ## Project Structure
 
 ```
 unitrack/
-├── mobile/              # React Native (Expo) mobile app
-│   ├── App.js          # Main app code
-│   ├── app.json        # Expo configuration
-│   └── assets/         # Icons and images
+├── mobile/          # React Native mobile app
+│   ├── App.js       # Main application code
+│   ├── app.json     # Expo configuration
+│   ├── eas.json     # EAS Build configuration
+│   └── assets/      # App icons and images
+├── backend/         # Cloud backend API
+│   ├── app.py       # Flask API with Playwright
+│   ├── Dockerfile   # Docker configuration
+│   ├── requirements.txt
+│   └── render.yaml  # Render deployment config
 └── README.md
 ```
 
+## How It Works
+
+1. User enters their ERP URL and credentials in the app
+2. App sends request to cloud backend
+3. Backend uses Playwright (headless browser) to:
+   - Login to the ERP
+   - Navigate to attendance section
+   - Capture attendance data from API responses
+4. Data is returned to the app and displayed
+5. Credentials are never stored on the server
+
+## Setup
+
+### Mobile App
+
+```bash
+cd mobile
+npm install
+npx expo start
+```
+
+### Backend (Local Development)
+
+```bash
+cd backend
+pip install -r requirements.txt
+playwright install chromium
+python app.py
+```
+
+### Building APK
+
+```bash
+cd mobile
+eas build --platform android --profile preview
+```
+
+## API Endpoints
+
+- `GET /` - API info
+- `GET /api/health` - Health check
+- `POST /api/fetch` - Fetch attendance data
+  ```json
+  {
+    "erp_url": "https://erp.university.edu",
+    "username": "student@email.com",
+    "password": "password123"
+  }
+  ```
+
+## Privacy
+
+- No credentials are stored on the server
+- All data is passed per-request
+- Attendance data is cached locally on device for offline access
+
 ## License
 
-MIT License
-
-## Contributing
-
-Pull requests welcome! Please open an issue first to discuss changes.
+MIT
